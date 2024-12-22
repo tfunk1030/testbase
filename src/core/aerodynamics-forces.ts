@@ -31,44 +31,6 @@ export class AerodynamicForces {
     }
 
     /**
-     * Calculate boundary layer separation point
-     * Data from advanced-aerodynamics.md Boundary Layer Characteristics
-     */
-    private calculateSeparationPoint(reynoldsNumber: number): number {
-        if (reynoldsNumber <= 100000) return 80;
-        if (reynoldsNumber <= 120000) return 95;
-        if (reynoldsNumber <= 140000) return 110;
-        if (reynoldsNumber <= 160000) return 120;
-        return 130;
-    }
-
-    /**
-     * Calculate pressure coefficient at given angle
-     * Data from advanced-aerodynamics.md Pressure Distribution
-     */
-    private calculatePressureCoefficient(
-        angle: number,
-        isDimpled: boolean = true
-    ): number {
-        const pressureDistribution = [
-            { angle: 0, smooth: 1.000, dimpled: 1.000 },
-            { angle: 30, smooth: 0.750, dimpled: 0.700 },
-            { angle: 60, smooth: 0.250, dimpled: 0.150 },
-            { angle: 90, smooth: -0.400, dimpled: -0.600 },
-            { angle: 120, smooth: -0.800, dimpled: -0.950 },
-            { angle: 150, smooth: -0.400, dimpled: -0.500 },
-            { angle: 180, smooth: -0.200, dimpled: -0.250 }
-        ];
-
-        // Find closest angles and interpolate
-        const sorted = pressureDistribution.sort((a, b) => 
-            Math.abs(a.angle - angle) - Math.abs(b.angle - angle)
-        );
-        
-        return isDimpled ? sorted[0].dimpled : sorted[0].smooth;
-    }
-
-    /**
      * Calculate vortex shedding effect
      * Data from advanced-aerodynamics.md Vortex Shedding
      */
@@ -137,12 +99,6 @@ export class AerodynamicForces {
             velocity.y * velocity.y +
             velocity.z * velocity.z
         );
-        
-        const spinRate = Math.sqrt(
-            spinVector.x * spinVector.x +
-            spinVector.y * spinVector.y +
-            spinVector.z * spinVector.z
-        );
 
         const liftMagnitude = 0.5 * airDensity * STANDARD_BALL_AREA * liftCoefficient * speed * speed;
         
@@ -181,17 +137,15 @@ export class AerodynamicForces {
             velocity.y * velocity.y +
             velocity.z * velocity.z
         );
-        
-        const spinRate = Math.sqrt(
-            spinVector.x * spinVector.x +
-            spinVector.y * spinVector.y +
-            spinVector.z * spinVector.z
-        );
 
         // Calculate Reynolds number and coefficients
         const reynoldsNumber = this.calculateReynoldsNumber(speed, airDensity);
         const dragCoefficient = this.getDragCoefficient(reynoldsNumber);
-        const liftCoefficient = this.calculateLiftCoefficient(spinRate);
+        const liftCoefficient = this.calculateLiftCoefficient(Math.sqrt(
+            spinVector.x * spinVector.x +
+            spinVector.y * spinVector.y +
+            spinVector.z * spinVector.z
+        ));
 
         // Apply vortex shedding effect
         const vortexEffect = this.calculateVortexEffect(speed);

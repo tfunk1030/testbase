@@ -1,10 +1,6 @@
 import { LaunchConditions, BallProperties, Environment } from './types';
 
 export class LaunchPhysics {
-    private readonly GRAVITY = 9.81; // m/s^2
-    private readonly AIR_DENSITY_SEA_LEVEL = 1.225; // kg/m^3
-    private readonly STANDARD_PRESSURE = 1013.25; // hPa
-    private readonly STANDARD_TEMPERATURE = 288.15; // K
     private readonly GAS_CONSTANT = 287.05; // J/(kg·K)
 
     /**
@@ -15,7 +11,7 @@ export class LaunchPhysics {
         vy: number;
         vz: number;
     } {
-        const speedMPS = conditions.ballSpeed * 0.44704; // Convert mph to m/s
+        const speedMPS = conditions.ballSpeed; // Already in m/s
         const angleRad = (conditions.launchAngle * Math.PI) / 180;
         const directionRad = (conditions.launchDirection * Math.PI) / 180;
 
@@ -48,14 +44,14 @@ export class LaunchPhysics {
      * Calculate air density based on environmental conditions
      */
     public calculateAirDensity(environment: Environment): number {
-        // Convert temperature from Fahrenheit to Kelvin
-        const temperatureK = (environment.temperature - 32) * 5/9 + 273.15;
+        // Convert temperature from Celsius to Kelvin
+        const temperatureK = environment.temperature + 273.15;
         
-        // Convert pressure from inHg to hPa
-        const pressureHPa = environment.pressure * 33.8639;
+        // Convert pressure from hPa to Pa
+        const pressurePa = environment.pressure * 100;
         
         // Calculate air density using ideal gas law
-        return pressureHPa * 100 / (this.GAS_CONSTANT * temperatureK);
+        return pressurePa / (this.GAS_CONSTANT * temperatureK);
     }
 
     /**
@@ -81,23 +77,48 @@ export class LaunchPhysics {
             velocity.vy * velocity.vy +
             velocity.vz * velocity.vz
         );
-        const diameter = ballProperties.diameter * 0.0254; // Convert inches to meters
+        const diameter = ballProperties.diameter; // Already in meters
         const viscosity = 1.81e-5; // Air viscosity at 20°C
         const reynoldsNumber = (airDensity * speed * diameter) / viscosity;
 
-        // Apply compression effects if available
-        if (ballProperties.compression !== undefined) {
-            const compressionFactor = 1 + (ballProperties.compression - 90) * 0.001;
-            velocity.vx *= compressionFactor;
-            velocity.vy *= compressionFactor;
-            velocity.vz *= compressionFactor;
-        }
+        // Apply temperature effects
+        const temperatureK = environment.temperature + 273.15;
+        const standardTemp = 293.15; // 20°C in Kelvin
+        const temperatureFactor = Math.sqrt(temperatureK / standardTemp);
+        velocity.vx *= temperatureFactor;
+        velocity.vy *= temperatureFactor;
+        velocity.vz *= temperatureFactor;
+
+        // Apply wind effects
+        const windSpeedX = environment.windSpeed * Math.cos(environment.windDirection * Math.PI / 180);
+        const windSpeedZ = environment.windSpeed * Math.sin(environment.windDirection * Math.PI / 180);
+        velocity.vx -= windSpeedX;
+        velocity.vz -= windSpeedZ;
 
         return {
             velocity,
             spin,
             airDensity,
             reynoldsNumber
+        };
+    }
+
+    /**
+     * Process launch conditions to get initial state
+     */
+    public processLaunch(conditions: LaunchConditions, environment: Environment, ballProperties: BallProperties) {
+        const params = this.calculateLaunchParameters(conditions, environment, ballProperties);
+        
+        return {
+            velocity: params.velocity,
+            spin: params.spin,
+            airDensity: params.airDensity,
+            initialState: {
+                position: { x: 0, y: 0, z: 0 },
+                velocity: { x: params.velocity.vx, y: params.velocity.vy, z: params.velocity.vz },
+                spin: { x: params.spin.wx, y: params.spin.wy, z: params.spin.wz },
+                mass: ballProperties.mass
+            }
         };
     }
 }

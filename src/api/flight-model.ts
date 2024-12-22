@@ -4,7 +4,8 @@ import {
     BallProperties,
     Trajectory,
     ValidationResult,
-    DataSet
+    DataSet,
+    SurfaceEffects
 } from '../core/types';
 import { ValidationSystem } from '../core/validation-system';
 import { FlightIntegrator } from '../core/flight-integrator';
@@ -89,12 +90,22 @@ export class FlightModel {
             mass: ballProperties.mass
         };
 
+        // Initialize surface effects
+        const surfaceEffects: SurfaceEffects = {
+            friction: 0.3,
+            restitution: 0.8,
+            rollResistance: 0.1,
+            bounceAngle: 45,
+            dragModifier: 1.0,
+            liftModifier: 1.0
+        };
+
         // Simulate flight
         return this.integrator.integrate(
             initialState,
             environment,
             ballProperties,
-            { dragModifier: 1.0, liftModifier: 1.0 }
+            surfaceEffects
         );
     }
 

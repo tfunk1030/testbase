@@ -65,7 +65,28 @@ export class DataGenerator {
      * Generate random ball properties
      */
     public generateBallProperties(): BallProperties {
+        const defaultBallProperties: BallProperties = {
+            mass: 0.0459,          // kg
+            diameter: 0.0428,      // m
+            dragCoefficient: 0.25,
+            liftCoefficient: 0.15,
+            spinDecayRate: 0.95,
+            compressionRatio: 0.8,
+            momentOfInertia: 4.3e-5,
+            dimplePattern: 'icosahedral',
+            coverMaterial: 'urethane',
+            dimpleCount: 392,
+            dimpleShape: 'circular',
+            edgeProfile: 'rounded',
+            surfaceTexture: 'smooth',
+            construction: '3-piece',
+            dimpleCoverage: 0.85,
+            dimpleDepth: 0.0015,
+            compression: 90
+        };
+
         return {
+            ...defaultBallProperties,
             mass: this.randomInRange(40, 50),
             diameter: this.randomInRange(1.6, 1.7),
             dimpleCount: Math.floor(this.randomInRange(300, 500)),
@@ -93,15 +114,68 @@ export class DataGenerator {
     /**
      * Generate dataset with random variations
      */
-    public generateDataSet(numSamples: number): DataSet {
+    public generateDataSet(numConditions: number): DataSet {
         const conditions: LaunchConditions[] = [];
-        for (let i = 0; i < numSamples; i++) {
+        for (let i = 0; i < numConditions; i++) {
             conditions.push(this.generateLaunchConditions());
         }
 
         return {
-            trajectories: [],
-            conditions: conditions,
+            conditions,
+            environment: this.generateEnvironment(),
+            ballProperties: this.generateBallProperties()
+        };
+    }
+
+    /**
+     * Generate validation dataset
+     */
+    public generateValidationSet(): DataSet {
+        return {
+            conditions: Array(10).fill(null).map(() => this.generateLaunchConditions()),
+            environment: this.generateEnvironment(),
+            ballProperties: this.generateBallProperties()
+        };
+    }
+
+    /**
+     * Generate club-specific dataset
+     */
+    public generateClubDataset(clubType: string, numSamples: number): DataSet {
+        const conditions = Array(numSamples).fill(null).map(() => {
+            let ballSpeed, launchAngle, totalSpin;
+            
+            switch (clubType.toUpperCase()) {
+                case 'DRIVER':
+                    ballSpeed = this.randomInRange(150, 175);
+                    launchAngle = this.randomInRange(8, 15);
+                    totalSpin = this.randomInRange(2000, 3000);
+                    break;
+                case 'IRON':
+                    ballSpeed = this.randomInRange(120, 140);
+                    launchAngle = this.randomInRange(15, 25);
+                    totalSpin = this.randomInRange(4000, 6000);
+                    break;
+                case 'WEDGE':
+                    ballSpeed = this.randomInRange(90, 110);
+                    launchAngle = this.randomInRange(25, 35);
+                    totalSpin = this.randomInRange(8000, 10000);
+                    break;
+                default:
+                    return this.generateLaunchConditions();
+            }
+
+            return {
+                ballSpeed,
+                launchAngle,
+                launchDirection: this.randomInRange(-5, 5), // Tighter dispersion
+                totalSpin,
+                spinAxis: this.randomInRange(-10, 10) // Tighter dispersion
+            };
+        });
+
+        return {
+            conditions,
             environment: this.generateEnvironment(),
             ballProperties: this.generateBallProperties()
         };

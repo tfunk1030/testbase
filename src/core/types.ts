@@ -5,42 +5,41 @@ export interface Vector3D {
 }
 
 export interface LaunchConditions {
-    ballSpeed: number;
-    launchAngle: number;
-    launchDirection: number;
-    totalSpin: number;
-    spinAxis: number;
+    ballSpeed: number;      // m/s
+    launchAngle: number;    // degrees
+    launchDirection: number;// degrees
+    totalSpin: number;      // rpm
+    spinAxis: number;       // degrees
 }
 
 export interface Environment {
-    temperature: number;
-    windSpeed: number;
-    windDirection: number;
-    altitude: number;
-    humidity: number;
-    pressure: number;
-    timeOfDay: 'dawn' | 'morning' | 'noon' | 'afternoon' | 'dusk' | 'night';
+    temperature: number;    // Celsius
+    pressure: number;       // hPa
+    humidity: number;       // percentage
+    altitude: number;       // meters
+    windSpeed: number;      // m/s
+    windDirection: number;  // degrees
+    timeOfDay?: string;    // 'morning' | 'afternoon' | 'evening'
 }
 
 export interface BallProperties {
-    mass: number;
-    diameter: number;
+    mass: number;          // kg
+    diameter: number;      // m
+    dragCoefficient?: number;
+    liftCoefficient?: number;
+    spinDecayRate?: number;
+    compressionRatio?: number;
+    momentOfInertia?: number;
+    dimplePattern: string;
+    coverMaterial?: string;
     dimpleCount: number;
     dimpleShape: 'circular' | 'hexagonal' | 'triangular';
-    dimplePattern: 'icosahedral' | 'octahedral' | 'tetrahedral' | 'hybrid';
     edgeProfile: 'sharp' | 'rounded' | 'smooth';
     surfaceTexture: 'smooth' | 'textured' | 'rough';
     construction: '2-piece' | '3-piece' | '4-piece' | '5-piece';
     dimpleCoverage: number;
     dimpleDepth: number;
     compression: number;
-}
-
-export interface Forces {
-    drag: Vector3D;
-    lift: Vector3D;
-    magnus: Vector3D;
-    gravity: Vector3D;
 }
 
 export interface BallState {
@@ -51,6 +50,11 @@ export interface BallState {
 }
 
 export interface TrajectoryPoint {
+    position: Vector3D;
+    velocity: Vector3D;
+    spin: Vector3D;
+    time: number;
+    // Flattened coordinates for convenience
     x: number;
     y: number;
     z: number;
@@ -65,27 +69,51 @@ export interface TrajectoryPoint {
 
 export interface Trajectory {
     points: TrajectoryPoint[];
+    initialConditions: LaunchConditions;
+    environment: Environment;
+    ballProperties: BallProperties;
     maxHeight: number;
     carryDistance: number;
+    totalDistance: number;
     flightTime: number;
+    landingAngle: number;
+    lateralDeviation: number;
 }
 
 export interface ValidationResult {
-    valid: boolean;
+    isValid: boolean;
     errors: string[];
     warnings: string[];
+    metrics: {
+        carryDistance: number;
+        totalDistance: number;
+        maxHeight: number;
+        flightTime: number;
+        spinRate: number;
+        launchAngle: number;
+    };
 }
 
 export interface DataSet {
-    trajectories: Trajectory[];
     conditions: LaunchConditions[];
     environment: Environment;
     ballProperties: BallProperties;
 }
 
 export interface SurfaceEffects {
+    friction: number;
+    restitution: number;
+    rollResistance: number;
+    bounceAngle: number;
     dragModifier: number;
     liftModifier: number;
+}
+
+export interface Forces {
+    drag: Vector3D;
+    lift: Vector3D;
+    magnus: Vector3D;
+    gravity: Vector3D;
 }
 
 export interface ValidationCase {

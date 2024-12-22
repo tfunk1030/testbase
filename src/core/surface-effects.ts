@@ -1,12 +1,4 @@
-import { BallProperties, SurfaceEffects } from './types';
-
-// Dimple effect lookup tables
-const DIMPLE_EFFECTS: Record<string, { coverage: number; effect: number }> = {
-    icosahedral: { coverage: 0.82, effect: 1.0 },
-    octahedral: { coverage: 0.78, effect: 0.95 },
-    tetrahedral: { coverage: 0.75, effect: 0.90 },
-    hybrid: { coverage: 0.80, effect: 0.98 }
-};
+import { SurfaceEffects } from './types';
 
 export class SurfaceEffectsCalculator {
     /**
@@ -46,6 +38,10 @@ export class SurfaceEffectsCalculator {
         }
 
         return {
+            friction: 0.3,
+            restitution: 0.8,
+            rollResistance: 0.1,
+            bounceAngle: 45,
             dragModifier,
             liftModifier
         };
