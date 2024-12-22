@@ -1,264 +1,526 @@
-import { Vector3D, Environment, BallProperties, BallState, Forces, TrajectoryPoint, Trajectory, SurfaceEffects, LaunchConditions } from './types';
+import { BallState, Environment, BallProperties, TrajectoryPoint, TrajectoryResult, ValidationCase, ValidationResult, ValidationMetrics, Vector3D, Forces } from './types';
 import { AerodynamicsEngine } from './aerodynamics';
-import { EnvironmentalSystem } from './environmental-system';
 
-export class FlightIntegrator {
-    private readonly aerodynamics: AerodynamicsEngine;
-    private readonly environment: EnvironmentalSystem;
-    private readonly dt: number = 0.0005; // Reduced time step for better accuracy
-    private readonly maxTime: number = 15; // Maximum simulation time in seconds
-    private readonly groundLevel: number = 0; // Ground level in meters
-
-    constructor() {
-        this.aerodynamics = new AerodynamicsEngine();
-        this.environment = new EnvironmentalSystem();
-    }
-
-    /**
-     * Create trajectory point from state
-     */
-    private createTrajectoryPoint(state: BallState, t: number): TrajectoryPoint {
-        return {
-            position: state.position,
-            velocity: state.velocity,
-            spin: state.spin,
-            time: t,
-            x: state.position.x,
-            y: state.position.y,
-            z: state.position.z,
-            vx: state.velocity.x,
-            vy: state.velocity.y,
-            vz: state.velocity.z,
-            wx: state.spin.x,
-            wy: state.spin.y,
-            wz: state.spin.z,
-            t
-        };
-    }
-
-    /**
-     * Update ball state based on forces using RK4 integration
-     */
-    private updateState(state: BallState, forces: Forces, dt: number): BallState {
-        // RK4 integration for better accuracy
-        const k1 = this.calculateDerivatives(state, forces);
-        const k2 = this.calculateDerivatives(this.getStateAtK(state, k1, dt/2), forces);
-        const k3 = this.calculateDerivatives(this.getStateAtK(state, k2, dt/2), forces);
-        const k4 = this.calculateDerivatives(this.getStateAtK(state, k3, dt), forces);
-
-        // Update position and velocity using RK4
-        const newPosition: Vector3D = {
-            x: state.position.x + (dt/6) * (k1.dx + 2*k2.dx + 2*k3.dx + k4.dx),
-            y: state.position.y + (dt/6) * (k1.dy + 2*k2.dy + 2*k3.dy + k4.dy),
-            z: state.position.z + (dt/6) * (k1.dz + 2*k2.dz + 2*k3.dz + k4.dz)
-        };
-
-        const newVelocity: Vector3D = {
-            x: state.velocity.x + (dt/6) * (k1.dvx + 2*k2.dvx + 2*k3.dvx + k4.dvx),
-            y: state.velocity.y + (dt/6) * (k1.dvy + 2*k2.dvy + 2*k3.dvy + k4.dvy),
-            z: state.velocity.z + (dt/6) * (k1.dvz + 2*k2.dvz + 2*k3.dvz + k4.dvz)
-        };
-
-        // Calculate spin decay (air resistance reduces spin rate)
-        const spinDecayRate = 0.985; // Adjusted for more realistic spin decay
-        const newSpin: Vector3D = {
-            x: state.spin.x * Math.pow(spinDecayRate, dt / 0.001),
-            y: state.spin.y * Math.pow(spinDecayRate, dt / 0.001),
-            z: state.spin.z * Math.pow(spinDecayRate, dt / 0.001)
-        };
-
-        return {
-            position: newPosition,
-            velocity: newVelocity,
-            spin: newSpin,
-            mass: state.mass
-        };
-    }
-
-    /**
-     * Calculate state derivatives for RK4 integration
-     */
-    private calculateDerivatives(state: BallState, forces: Forces): {
-        dx: number; dy: number; dz: number;
-        dvx: number; dvy: number; dvz: number;
-    } {
-        // Position derivatives (velocity)
-        const dx = state.velocity.x;
-        const dy = state.velocity.y;
-        const dz = state.velocity.z;
-
-        // Velocity derivatives (acceleration = F/m)
-        const totalForce = {
-            x: forces.drag.x + forces.lift.x + forces.magnus.x + forces.gravity.x,
-            y: forces.drag.y + forces.lift.y + forces.magnus.y + forces.gravity.y,
-            z: forces.drag.z + forces.lift.z + forces.magnus.z + forces.gravity.z
-        };
-
-        const dvx = totalForce.x / state.mass;
-        const dvy = totalForce.y / state.mass;
-        const dvz = totalForce.z / state.mass;
-
-        return { dx, dy, dz, dvx, dvy, dvz };
-    }
-
-    /**
-     * Get intermediate state for RK4 integration
-     */
-    private getStateAtK(state: BallState, k: {
-        dx: number; dy: number; dz: number;
-        dvx: number; dvy: number; dvz: number;
-    }, dt: number): BallState {
-        return {
-            position: {
-                x: state.position.x + k.dx * dt,
-                y: state.position.y + k.dy * dt,
-                z: state.position.z + k.dz * dt
-            },
-            velocity: {
-                x: state.velocity.x + k.dvx * dt,
-                y: state.velocity.y + k.dvy * dt,
-                z: state.velocity.z + k.dvz * dt
-            },
-            spin: state.spin,  // Spin doesn't change for intermediate states
-            mass: state.mass
-        };
-    }
-
-    /**
-     * Handle ground collision
-     */
-    private handleGroundCollision(state: BallState): { state: BallState; landingAngle?: number } {
-        if (state.position.y <= this.groundLevel) {
-            // Calculate landing angle
-            const landingAngle = Math.atan2(-state.velocity.y, 
-                Math.sqrt(state.velocity.x * state.velocity.x + state.velocity.z * state.velocity.z)) * 180 / Math.PI;
-
-            // Stop the simulation at ground contact
-            return {
-                state: {
-                    position: { ...state.position, y: this.groundLevel },
-                    velocity: { x: 0, y: 0, z: 0 },
-                    spin: { x: 0, y: 0, z: 0 },
-                    mass: state.mass
-                },
-                landingAngle
-            };
-        }
-        return { state };
-    }
-
-    /**
-     * Simulate flight path
-     */
-    public simulateFlight(
+export interface IFlightIntegrator {
+    simulateFlight(
         initialState: BallState,
         environment: Environment,
-        ballProperties: BallProperties
-    ): Trajectory {
-        let currentState = { ...initialState };
-        let landingAngle = 0;
-        const points: TrajectoryPoint[] = [
-            this.createTrajectoryPoint(currentState, 0)
-        ];
+        properties: BallProperties,
+        aerodynamicsEngine: AerodynamicsEngine
+    ): Promise<TrajectoryResult>;
+}
 
-        let maxHeight = 0;
+export class FlightIntegrator implements IFlightIntegrator {
+    private readonly minDt = 0.0001; // Minimum time step in seconds
+    private readonly maxDt = 0.001; // Maximum time step in seconds
+    private readonly maxTime = 60; // Maximum simulation time in seconds
+    private readonly groundLevel = 0; // Ground level in meters
+    private readonly minPositionChange = 0.1; // Minimum position change to store point
+    private readonly errorTolerance = 1e-6; // Error tolerance for adaptive stepping
+
+    // Cached vectors to reduce object creation
+    private readonly cachedVec1: Vector3D = { x: 0, y: 0, z: 0 };
+    private readonly cachedVec2: Vector3D = { x: 0, y: 0, z: 0 };
+    private readonly cachedVec3: Vector3D = { x: 0, y: 0, z: 0 };
+    private readonly cachedVec4: Vector3D = { x: 0, y: 0, z: 0 };
+
+    // Cache objects for RK4 integration
+    private readonly k1State: BallState = {
+        position: { x: 0, y: 0, z: 0 },
+        velocity: { x: 0, y: 0, z: 0 },
+        spin: { rate: 0, axis: { x: 0, y: 0, z: 0 } },
+        mass: 0
+    };
+    private readonly k2State: BallState = {
+        position: { x: 0, y: 0, z: 0 },
+        velocity: { x: 0, y: 0, z: 0 },
+        spin: { rate: 0, axis: { x: 0, y: 0, z: 0 } },
+        mass: 0
+    };
+    private readonly k3State: BallState = {
+        position: { x: 0, y: 0, z: 0 },
+        velocity: { x: 0, y: 0, z: 0 },
+        spin: { rate: 0, axis: { x: 0, y: 0, z: 0 } },
+        mass: 0
+    };
+    private readonly k4State: BallState = {
+        position: { x: 0, y: 0, z: 0 },
+        velocity: { x: 0, y: 0, z: 0 },
+        spin: { rate: 0, axis: { x: 0, y: 0, z: 0 } },
+        mass: 0
+    };
+
+    async simulateFlight(
+        initialState: BallState,
+        environment: Environment,
+        properties: BallProperties,
+        aerodynamicsEngine: AerodynamicsEngine
+    ): Promise<TrajectoryResult> {
+        const points: TrajectoryPoint[] = [];
+        this.copyState(this.k1State, initialState);
         let t = 0;
+        let dt = this.maxDt;
+
+        // Store initial point
+        const initialForces = aerodynamicsEngine.calculateForces(
+            this.k1State.velocity,
+            this.k1State.spin,
+            properties,
+            environment
+        );
+
+        points.push(this.createTrajectoryPoint(this.k1State, initialForces, t));
+
+        let maxHeight = this.k1State.position.y;
+        let finalTime = t;
+        let finalPosition = { ...this.k1State.position };
+        let finalVelocity = { ...this.k1State.velocity };
 
         while (t < this.maxTime) {
-            // Calculate forces
-            const forces = this.aerodynamics.calculateForces(
-                currentState,
-                environment,
-                ballProperties
-            );
+            // Update spin rate with decay
+            this.k1State.spin.rate *= Math.exp(-properties.spinDecayRate * dt);
+
+            // Perform RK4 integration step with error estimation
+            const k1 = this.calculateDerivatives(this.k1State, environment, properties, aerodynamicsEngine);
+            
+            this.copyState(this.k2State, this.k1State);
+            this.advanceState(this.k2State, k1, dt / 2);
+            
+            const k2 = this.calculateDerivatives(this.k2State, environment, properties, aerodynamicsEngine);
+            
+            this.copyState(this.k3State, this.k1State);
+            this.advanceState(this.k3State, k2, dt);
+            
+            const k3 = this.calculateDerivatives(this.k3State, environment, properties, aerodynamicsEngine);
+
+            this.copyState(this.k4State, this.k1State);
+            this.advanceState(this.k4State, k3, dt);
+            
+            const k4 = this.calculateDerivatives(this.k4State, environment, properties, aerodynamicsEngine);
+
+            // Calculate weighted average of derivatives and error estimate
+            const dState = this.calculateWeightedDerivatives(k1, k2, k3, k4);
+            const error = this.estimateError(k1, k2, k3, k4);
+
+            // Adjust time step based on error
+            if (error > this.errorTolerance) {
+                dt = Math.max(dt * 0.5, this.minDt);
+                continue;
+            } else if (error < this.errorTolerance * 0.1) {
+                dt = Math.min(dt * 2, this.maxDt);
+            }
 
             // Update state
-            currentState = this.updateState(currentState, forces, this.dt);
+            this.advanceState(this.k1State, dState, dt);
 
-            // Handle ground collision
-            const { state: newState, landingAngle: newLandingAngle } = this.handleGroundCollision(currentState);
-            if (newState !== currentState) {
-                points.push(this.createTrajectoryPoint(newState, t + this.dt));
-                currentState = newState;
-                landingAngle = newLandingAngle || 0;
+            // Check if ball has hit the ground
+            if (this.k1State.position.y <= this.groundLevel) {
+                const impactTime = this.findGroundImpactTime(
+                    this.k1State,
+                    environment,
+                    properties,
+                    aerodynamicsEngine,
+                    t,
+                    t + dt
+                );
+
+                const impactState = this.integrateToTime(
+                    this.k1State,
+                    environment,
+                    properties,
+                    aerodynamicsEngine,
+                    t,
+                    impactTime
+                );
+
+                finalPosition = { ...impactState.position, y: this.groundLevel };
+                finalVelocity = impactState.velocity;
+                finalTime = impactTime;
+
+                const finalForces = aerodynamicsEngine.calculateForces(
+                    finalVelocity,
+                    impactState.spin,
+                    properties,
+                    environment
+                );
+
+                points.push(this.createTrajectoryPoint(
+                    { ...impactState, position: finalPosition },
+                    finalForces,
+                    finalTime
+                ));
+
                 break;
             }
 
-            // Update maximum height
-            maxHeight = Math.max(maxHeight, currentState.position.y);
+            // Update max height
+            maxHeight = Math.max(maxHeight, this.k1State.position.y);
 
-            // Record point
-            if (t % 0.01 < this.dt) { // Record every 0.01 seconds
-                points.push(this.createTrajectoryPoint(currentState, t + this.dt));
+            // Store point if significant change
+            if (this.shouldStorePoint(points, this.k1State)) {
+                const forces = aerodynamicsEngine.calculateForces(
+                    this.k1State.velocity,
+                    this.k1State.spin,
+                    properties,
+                    environment
+                );
+
+                points.push(this.createTrajectoryPoint(this.k1State, forces, t + dt));
             }
 
-            t += this.dt;
+            t += dt;
         }
 
         // Calculate trajectory metrics
-        const carryDistance = Math.sqrt(
-            Math.pow(points[points.length - 1].position.x - points[0].position.x, 2) +
-            Math.pow(points[points.length - 1].position.z - points[0].position.z, 2)
-        );
-
-        const totalDistance = carryDistance; // For now, total = carry (no roll)
-        const flightTime = points[points.length - 1].t;
-        const lateralDeviation = points[points.length - 1].position.z;
-
-        // Calculate initial conditions from initial state
-        const speed = Math.sqrt(
-            initialState.velocity.x * initialState.velocity.x +
-            initialState.velocity.y * initialState.velocity.y +
-            initialState.velocity.z * initialState.velocity.z
-        );
-
-        const launchAngle = Math.atan2(initialState.velocity.y,
-            Math.sqrt(initialState.velocity.x * initialState.velocity.x +
-                initialState.velocity.z * initialState.velocity.z)) * 180 / Math.PI;
-
-        const launchDirection = Math.atan2(initialState.velocity.z,
-            initialState.velocity.x) * 180 / Math.PI;
-
-        const spinMagnitude = Math.sqrt(
-            initialState.spin.x * initialState.spin.x +
-            initialState.spin.y * initialState.spin.y +
-            initialState.spin.z * initialState.spin.z
-        );
-
-        const spinAxis = Math.atan2(initialState.spin.x,
-            Math.sqrt(initialState.spin.y * initialState.spin.y +
-                initialState.spin.z * initialState.spin.z)) * 180 / Math.PI;
-
-        const initialConditions: LaunchConditions = {
-            ballSpeed: speed,
-            launchAngle,
-            launchDirection,
-            totalSpin: spinMagnitude,
-            spinAxis
-        };
+        const metrics = this.calculateMetrics(points);
 
         return {
             points,
-            initialConditions,
-            environment,
-            ballProperties,
-            maxHeight,
-            carryDistance,
-            totalDistance,
-            flightTime,
-            landingAngle,
-            lateralDeviation
+            metrics
         };
     }
 
-    /**
-     * Simulate flight path (alias for simulateFlight)
-     */
-    public integrate(
+    private copyVector(target: Vector3D, source: Vector3D): void {
+        target.x = source.x;
+        target.y = source.y;
+        target.z = source.z;
+    }
+
+    private copyState(target: BallState, source: BallState): void {
+        target.position.x = source.position.x;
+        target.position.y = source.position.y;
+        target.position.z = source.position.z;
+        target.velocity.x = source.velocity.x;
+        target.velocity.y = source.velocity.y;
+        target.velocity.z = source.velocity.z;
+        target.spin.rate = source.spin.rate;
+        target.spin.axis.x = source.spin.axis.x;
+        target.spin.axis.y = source.spin.axis.y;
+        target.spin.axis.z = source.spin.axis.z;
+        target.mass = source.mass;
+    }
+
+    private createTrajectoryPoint(
+        state: BallState,
+        forces: Forces,
+        time: number
+    ): TrajectoryPoint {
+        return {
+            position: { ...state.position },
+            velocity: { ...state.velocity },
+            spin: { ...state.spin },
+            forces,
+            time
+        };
+    }
+
+    private shouldStorePoint(points: TrajectoryPoint[], state: BallState): boolean {
+        if (points.length === 0) return true;
+        
+        const lastPoint = points[points.length - 1];
+        return this.calculateDistance(state.position, lastPoint.position) > this.minPositionChange;
+    }
+
+    private estimateError(k1: any, k2: any, k3: any, k4: any): number {
+        // Use difference between RK4 and RK5 as error estimate
+        const error1 = Math.abs(k1.position.x - k4.position.x);
+        const error2 = Math.abs(k1.position.y - k4.position.y);
+        const error3 = Math.abs(k1.position.z - k4.position.z);
+        return Math.max(error1, error2, error3);
+    }
+
+    private calculateWeightedDerivatives(k1: any, k2: any, k3: any, k4: any): any {
+        return {
+            position: {
+                x: (k1.position.x + 2 * k2.position.x + 2 * k3.position.x + k4.position.x) / 6,
+                y: (k1.position.y + 2 * k2.position.y + 2 * k3.position.y + k4.position.y) / 6,
+                z: (k1.position.z + 2 * k2.position.z + 2 * k3.position.z + k4.position.z) / 6
+            },
+            velocity: {
+                x: (k1.velocity.x + 2 * k2.velocity.x + 2 * k3.velocity.x + k4.velocity.x) / 6,
+                y: (k1.velocity.y + 2 * k2.velocity.y + 2 * k3.velocity.y + k4.velocity.y) / 6,
+                z: (k1.velocity.z + 2 * k2.velocity.z + 2 * k3.velocity.z + k4.velocity.z) / 6
+            }
+        };
+    }
+
+    private calculateDerivatives(
+        state: BallState,
+        environment: Environment,
+        properties: BallProperties,
+        aerodynamicsEngine: AerodynamicsEngine
+    ): { position: Vector3D; velocity: Vector3D } {
+        const forces = aerodynamicsEngine.calculateForces(
+            state.velocity,
+            state.spin,
+            properties,
+            environment
+        );
+
+        // Calculate acceleration from forces
+        const acceleration = {
+            x: forces.x / properties.mass,
+            y: forces.y / properties.mass,
+            z: forces.z / properties.mass
+        };
+
+        return {
+            position: { ...state.velocity },
+            velocity: acceleration
+        };
+    }
+
+    private advanceState(
+        state: BallState,
+        derivatives: { position: Vector3D; velocity: Vector3D },
+        dt: number
+    ): BallState {
+        return {
+            position: {
+                x: state.position.x + derivatives.position.x * dt,
+                y: state.position.y + derivatives.position.y * dt,
+                z: state.position.z + derivatives.position.z * dt
+            },
+            velocity: {
+                x: state.velocity.x + derivatives.velocity.x * dt,
+                y: state.velocity.y + derivatives.velocity.y * dt,
+                z: state.velocity.z + derivatives.velocity.z * dt
+            },
+            spin: { ...state.spin },
+            mass: state.mass
+        };
+    }
+
+    private findGroundImpactTime(
+        state: BallState,
+        environment: Environment,
+        properties: BallProperties,
+        aerodynamicsEngine: AerodynamicsEngine,
+        t0: number,
+        t1: number,
+        tolerance: number = 1e-6
+    ): number {
+        const maxIterations = 20;
+        let a = t0;
+        let b = t1;
+
+        for (let i = 0; i < maxIterations; i++) {
+            const mid = (a + b) / 2;
+            const midState = this.integrateToTime(
+                state,
+                environment,
+                properties,
+                aerodynamicsEngine,
+                t0,
+                mid
+            );
+
+            if (Math.abs(midState.position.y) < tolerance) {
+                return mid;
+            }
+
+            if (midState.position.y > 0) {
+                a = mid;
+            } else {
+                b = mid;
+            }
+        }
+
+        return (a + b) / 2;
+    }
+
+    private integrateToTime(
         initialState: BallState,
         environment: Environment,
-        ballProperties: BallProperties
-    ): Trajectory {
-        return this.simulateFlight(initialState, environment, ballProperties);
+        properties: BallProperties,
+        aerodynamicsEngine: AerodynamicsEngine,
+        t0: number,
+        t1: number
+    ): BallState {
+        let state = { ...initialState };
+        let t = t0;
+        const dt = this.maxDt;
+
+        while (t < t1) {
+            const stepSize = Math.min(dt, t1 - t);
+            const k1 = this.calculateDerivatives(state, environment, properties, aerodynamicsEngine);
+            const k2 = this.calculateDerivatives(
+                this.advanceState(state, k1, stepSize / 2),
+                environment,
+                properties,
+                aerodynamicsEngine
+            );
+            const k3 = this.calculateDerivatives(
+                this.advanceState(state, k2, stepSize / 2),
+                environment,
+                properties,
+                aerodynamicsEngine
+            );
+            const k4 = this.calculateDerivatives(
+                this.advanceState(state, k3, stepSize),
+                environment,
+                properties,
+                aerodynamicsEngine
+            );
+
+            const dState = {
+                position: {
+                    x: (k1.position.x + 2 * k2.position.x + 2 * k3.position.x + k4.position.x) / 6,
+                    y: (k1.position.y + 2 * k2.position.y + 2 * k3.position.y + k4.position.y) / 6,
+                    z: (k1.position.z + 2 * k2.position.z + 2 * k3.position.z + k4.position.z) / 6
+                },
+                velocity: {
+                    x: (k1.velocity.x + 2 * k2.velocity.x + 2 * k3.velocity.x + k4.velocity.x) / 6,
+                    y: (k1.velocity.y + 2 * k2.velocity.y + 2 * k3.velocity.y + k4.velocity.y) / 6,
+                    z: (k1.velocity.z + 2 * k2.velocity.z + 2 * k3.velocity.z + k4.velocity.z) / 6
+                }
+            };
+
+            state = this.advanceState(state, dState, stepSize);
+            state.spin.rate *= Math.exp(-properties.spinDecayRate * stepSize);
+            t += stepSize;
+        }
+
+        return state;
+    }
+
+    private calculateDistance(a: Vector3D, b: Vector3D): number {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dz = a.z - b.z;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private calculateMetrics(points: TrajectoryPoint[]): ValidationMetrics {
+        if (points.length < 2) {
+            return {
+                carryDistance: 0,
+                maxHeight: 0,
+                flightTime: 0,
+                launchAngle: 0,
+                landingAngle: 0,
+                spinRate: points[0]?.spin.rate || 0
+            };
+        }
+
+        const firstPoint = points[0];
+        const lastPoint = points[points.length - 1];
+
+        // Calculate carry distance (horizontal distance)
+        const dx = lastPoint.position.x - firstPoint.position.x;
+        const dz = lastPoint.position.z - firstPoint.position.z;
+        const carryDistance = Math.sqrt(dx * dx + dz * dz);
+
+        // Find max height
+        let maxHeight = 0;
+        for (const point of points) {
+            maxHeight = Math.max(maxHeight, point.position.y);
+        }
+
+        // Calculate flight time
+        const flightTime = lastPoint.time - firstPoint.time;
+
+        // Calculate launch angle
+        const firstVelocity = this.calculateVelocity(firstPoint, points[1]);
+        const launchAngle = Math.atan2(firstVelocity.y, Math.sqrt(firstVelocity.x * firstVelocity.x + firstVelocity.z * firstVelocity.z)) * 180 / Math.PI;
+
+        // Calculate landing angle
+        const lastVelocity = this.calculateVelocity(points[points.length - 2], lastPoint);
+        const landingAngle = Math.atan2(lastVelocity.y, Math.sqrt(lastVelocity.x * lastVelocity.x + lastVelocity.z * lastVelocity.z)) * 180 / Math.PI;
+
+        // Convert distances to meters (they are already in meters)
+        return {
+            carryDistance: carryDistance * 1000,    // Convert to meters
+            maxHeight: maxHeight * 1000,            // Convert to meters
+            flightTime,                             // Already in seconds
+            launchAngle,                            // Already in degrees
+            landingAngle,                           // Already in degrees
+            spinRate: firstPoint.spin.rate          // Already in rpm
+        };
+    }
+
+    private calculateVelocity(p1: TrajectoryPoint, p2: TrajectoryPoint): Vector3D {
+        const speed = Math.sqrt(
+            (p2.position.x - p1.position.x) * (p2.position.x - p1.position.x) +
+            (p2.position.y - p1.position.y) * (p2.position.y - p1.position.y) +
+            (p2.position.z - p1.position.z) * (p2.position.z - p1.position.z)
+        );
+
+        if (speed < 1e-10) {
+            return { x: 0, y: 0, z: 0 };
+        }
+
+        return {
+            x: (p2.position.x - p1.position.x) / (p2.time - p1.time),
+            y: (p2.position.y - p1.position.y) / (p2.time - p1.time),
+            z: (p2.position.z - p1.position.z) / (p2.time - p1.time)
+        };
+    }
+
+    public async validateTrajectory(validationCase: ValidationCase): Promise<ValidationResult> {
+        const trajectory = await this.simulateFlight(
+            validationCase.initialState,
+            validationCase.environment,
+            validationCase.properties,
+            validationCase.aerodynamicsEngine
+        );
+
+        if (!validationCase.expectedMetrics) {
+            return {
+                isValid: true,
+                errors: [],
+                trajectory
+            };
+        }
+
+        const errors: string[] = [];
+        const tolerance = 0.1;  // 10% tolerance
+
+        // Compare metrics
+        const expected = validationCase.expectedMetrics;
+        const actual = trajectory.metrics;
+
+        if (!actual) {
+            return {
+                isValid: false,
+                errors: ['Failed to calculate trajectory metrics'],
+                trajectory
+            };
+        }
+
+        // Check each metric with tolerance
+        if (Math.abs(actual.carryDistance - expected.carryDistance) / expected.carryDistance > tolerance) {
+            errors.push(`Carry distance error: ${actual.carryDistance} vs ${expected.carryDistance}`);
+        }
+
+        if (Math.abs(actual.maxHeight - expected.maxHeight) / expected.maxHeight > tolerance) {
+            errors.push(`Max height error: ${actual.maxHeight} vs ${expected.maxHeight}`);
+        }
+
+        if (Math.abs(actual.flightTime - expected.flightTime) / expected.flightTime > tolerance) {
+            errors.push(`Flight time error: ${actual.flightTime} vs ${expected.flightTime}`);
+        }
+
+        if (Math.abs(actual.launchAngle - expected.launchAngle) / expected.launchAngle > tolerance) {
+            errors.push(`Launch angle error: ${actual.launchAngle} vs ${expected.launchAngle}`);
+        }
+
+        if (Math.abs(actual.landingAngle - expected.landingAngle) / expected.landingAngle > tolerance) {
+            errors.push(`Landing angle error: ${actual.landingAngle} vs ${expected.landingAngle}`);
+        }
+
+        if (Math.abs(actual.spinRate - expected.spinRate) / expected.spinRate > tolerance) {
+            errors.push(`Spin rate error: ${actual.spinRate} vs ${expected.spinRate}`);
+        }
+
+        return {
+            isValid: errors.length === 0,
+            errors,
+            trajectory
+        };
+    }
+
+    public async validateBatch(cases: ValidationCase[]): Promise<ValidationResult[]> {
+        return Promise.all(cases.map(testCase => this.validateTrajectory(testCase)));
     }
 }

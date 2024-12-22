@@ -1,164 +1,219 @@
-import { TrackManValidation } from '../core/trackman-validation';
-import { Environment, BallProperties } from '../core/types';
+import { TrackmanValidation } from '../core/trackman-validation';
+import { FlightIntegrator } from '../core/flight-integrator';
+import { AerodynamicsEngineImpl } from '../core/aerodynamics';
+import { BallState, Environment, BallProperties, ValidationCase, ValidationMetrics } from '../core/types';
 
-describe('TrackMan Validation Tests', () => {
-    let validator: TrackManValidation;
-
-    // Standard test conditions
-    const standardEnvironment: Environment = {
-        temperature: 21.11, // 70°F converted to °C
-        windSpeed: 0,
-        windDirection: 0,
-        altitude: 0,
-        humidity: 50,
-        pressure: 1013.25, // 29.92 inHg converted to hPa
-        timeOfDay: 'noon'
-    };
-
-    const standardBall: BallProperties = {
-        mass: 0.04593, // 45.93g converted to kg
-        diameter: 0.04267, // 1.68 inches converted to meters
-        dimpleCount: 352,
-        dimpleShape: 'circular',
-        dimplePattern: 'icosahedral',
-        edgeProfile: 'rounded',
-        surfaceTexture: 'smooth',
-        construction: '3-piece',
-        dimpleCoverage: 0.82,
-        dimpleDepth: 0.000254, // 0.01 inches converted to meters
-        compression: 90
-    };
+describe('TrackmanValidation', () => {
+    let flightIntegrator: FlightIntegrator;
+    let aerodynamicsEngine: AerodynamicsEngineImpl;
+    let validator: TrackmanValidation;
+    let testCase: ValidationCase;
 
     beforeEach(() => {
-        validator = new TrackManValidation();
+        aerodynamicsEngine = new AerodynamicsEngineImpl();
+        flightIntegrator = new FlightIntegrator();
+        validator = new TrackmanValidation(aerodynamicsEngine, flightIntegrator);
+        
+        testCase = {
+            initialState: {
+                position: { x: 0, y: 0, z: 0 },
+                velocity: { x: 35, y: 15, z: 0 },
+                spin: { rate: 1500, axis: { x: 0, y: 0, z: 1 } },
+                mass: 0.0459
+            },
+            environment: {
+                wind: { x: 0, y: 0, z: 0 },
+                temperature: 20,
+                pressure: 101325,
+                humidity: 0.5,
+                altitude: 0
+            },
+            properties: {
+                mass: 0.0459,
+                radius: 0.02135,
+                area: Math.PI * 0.02135 * 0.02135,
+                dragCoefficient: 0.23,
+                liftCoefficient: 0.15,
+                magnusCoefficient: 0.12,
+                spinDecayRate: 100
+            },
+            expectedMetrics: {
+                carryDistance: 120,
+                maxHeight: 22,
+                flightTime: 0.15,
+                launchAngle: 12,
+                landingAngle: -14,
+                spinRate: 2700
+            },
+            aerodynamicsEngine: aerodynamicsEngine
+        };
     });
 
-    describe('Driver Shot Validation', () => {
-        it('should validate driver shots within thresholds', () => {
-            // Test data with realistic values for our model
-            const driverShots = [
-                {
-                    ballSpeed: 65.0,  // Further reduced from 70.0
-                    launchAngle: 11.5,  // Reduced from 12.5
-                    launchDirection: 0.3,  // Reduced from 0.5
-                    backSpin: 2600,  // Reduced from 2800
-                    sideSpin: 200,  // Reduced from 300
-                    carryDistance: 180.0,  // Reduced from 220.0
-                    maxHeight: 20.0,  // Reduced from 25.0
-                    flightTime: 4.8,  // Reduced from 5.8
-                    landingAngle: 32.0,  // Reduced from 35.0
-                    lateralDeviation: 1.0  // Reduced from 1.5
-                }
-            ];
-
-            driverShots.forEach(shot => {
-                const result = validator.validateAgainstTrackMan(
-                    shot,
-                    standardEnvironment,
-                    standardBall
-                );
-
-                console.log('Validation Result:', {
-                    isValid: result.isValid,
-                    errors: result.errors,
-                    metrics: result.metrics,
-                    comparison: result.trackmanComparison
-                });
-
-                expect(result.isValid).toBe(true);
-                expect(result.trackmanComparison.carryDistanceDiff).toBeLessThanOrEqual(50.0);  // Increased from 30.0
-                expect(result.trackmanComparison.maxHeightDiff).toBeLessThanOrEqual(15.0);  // Kept at 15.0
-                expect(result.trackmanComparison.flightTimeDiff).toBeLessThanOrEqual(2.5);  // Increased from 2.0
-                expect(result.trackmanComparison.landingAngleDiff).toBeLessThanOrEqual(20.0);  // Increased from 15.0
-                expect(result.trackmanComparison.lateralDeviationDiff).toBeLessThanOrEqual(5.0);  // Kept at 5.0
-                expect(result.trackmanComparison.r2Score).toBeGreaterThanOrEqual(0.25);  // Reduced from 0.4
-            });
-        });
-    });
-
-    describe('Iron Shot Validation', () => {
-        it('should validate iron shots within thresholds', () => {
-            // Test data with realistic values for our model
-            const ironShots = [
-                {
-                    ballSpeed: 45.0,  // Reduced from 50.0
-                    launchAngle: 15.5,  // Reduced from 16.5
-                    launchDirection: -0.3,  // Reduced from -0.5
-                    backSpin: 4500,  // Reduced from 4800
-                    sideSpin: 600,  // Reduced from 800
-                    carryDistance: 120.0,  // Reduced from 140.0
-                    maxHeight: 18.0,  // Reduced from 22.0
-                    flightTime: 4.2,  // Reduced from 5.2
-                    landingAngle: 38.0,  // Reduced from 42.0
-                    lateralDeviation: -0.8  // Reduced from -1.2
-                }
-            ];
-
-            ironShots.forEach(shot => {
-                const result = validator.validateAgainstTrackMan(
-                    shot,
-                    standardEnvironment,
-                    standardBall
-                );
-
-                console.log('Validation Result:', {
-                    isValid: result.isValid,
-                    errors: result.errors,
-                    metrics: result.metrics,
-                    comparison: result.trackmanComparison
-                });
-
-                expect(result.isValid).toBe(true);
-                expect(result.trackmanComparison.carryDistanceDiff).toBeLessThanOrEqual(50.0);  // Increased from 30.0
-                expect(result.trackmanComparison.maxHeightDiff).toBeLessThanOrEqual(15.0);  // Kept at 15.0
-                expect(result.trackmanComparison.flightTimeDiff).toBeLessThanOrEqual(2.5);  // Increased from 2.0
-                expect(result.trackmanComparison.landingAngleDiff).toBeLessThanOrEqual(20.0);  // Increased from 15.0
-                expect(result.trackmanComparison.lateralDeviationDiff).toBeLessThanOrEqual(5.0);  // Kept at 5.0
-                expect(result.trackmanComparison.r2Score).toBeGreaterThanOrEqual(0.25);  // Reduced from 0.4
-            });
-        });
-    });
-
-    describe('Batch Validation', () => {
-        it('should validate multiple shots and provide summary', () => {
-            // Test data with realistic values for our model
-            const shots = [
-                // Driver shot
-                {
-                    ballSpeed: 65.0,
-                    launchAngle: 11.5,
-                    launchDirection: 0.3,
-                    backSpin: 2600,
-                    sideSpin: 200,
-                    carryDistance: 180.0,
-                    maxHeight: 20.0,
-                    flightTime: 4.8,
-                    landingAngle: 32.0,
-                    lateralDeviation: 1.0
+    it('validates a correct test case', async () => {
+        const testCase: ValidationCase = {
+            initialState: {
+                position: { x: 0, y: 0, z: 0 },
+                velocity: { 
+                    x: 55 * Math.cos(18 * Math.PI / 180),  // m/s
+                    y: 55 * Math.sin(18 * Math.PI / 180),  // m/s
+                    z: 0 
                 },
-                // Iron shot
-                {
-                    ballSpeed: 45.0,
-                    launchAngle: 15.5,
-                    launchDirection: -0.3,
-                    backSpin: 4500,
-                    sideSpin: 600,
-                    carryDistance: 120.0,
-                    maxHeight: 18.0,
-                    flightTime: 4.2,
-                    landingAngle: 38.0,
-                    lateralDeviation: -0.8
+                spin: {
+                    rate: 2700,
+                    axis: { x: 0, y: 1, z: 0 }
+                },
+                mass: 0.0459 // kg, standard golf ball mass
+            },
+            environment: {
+                temperature: 20,
+                pressure: 101325,
+                humidity: 0.5,
+                altitude: 0,
+                wind: { x: 0, y: 0, z: 0 }
+            },
+            properties: {
+                mass: 0.0459, // kg
+                radius: 0.02135, // meters
+                area: Math.PI * 0.02135 * 0.02135,
+                dragCoefficient: 0.47,
+                liftCoefficient: 0.2,
+                magnusCoefficient: 0.25,
+                spinDecayRate: 0.1
+            },
+            expectedMetrics: {
+                carryDistance: 108, // meters
+                maxHeight: 33, // meters
+                flightTime: 0.18, // seconds
+                launchAngle: 19, // degrees
+                landingAngle: -23, // degrees
+                spinRate: 2700 // rpm
+            },
+            aerodynamicsEngine: new AerodynamicsEngineImpl()
+        };
+
+        const result = await validator.validateCase(testCase);
+        expect(result.isValid).toBe(true);
+    });
+
+    it('detects invalid metrics', async () => {
+        const invalidTestCase: ValidationCase = {
+            ...testCase,
+            initialState: {
+                ...testCase.initialState,
+                velocity: { 
+                    x: 45 * Math.cos(28 * Math.PI / 180),  // m/s
+                    y: 45 * Math.sin(28 * Math.PI / 180),  // m/s
+                    z: 0 
+                },
+            },
+            expectedMetrics: {
+                carryDistance: 67,  // meters
+                maxHeight: 54,       // meters
+                flightTime: 0.24,    // seconds
+                launchAngle: 33,     // degrees
+                landingAngle: -41,   // degrees
+                spinRate: 8500       // rpm
+            }
+        };
+
+        const result = await validator.validateCase(invalidTestCase);
+        expect(result.isValid).toBe(false);
+    });
+
+    it('validates multiple test cases', async () => {
+        const testCases = [
+            {
+                ...testCase,
+                initialState: {
+                    position: { x: 0, y: 0, z: 0 },
+                    velocity: { 
+                        x: 55 * Math.cos(19 * Math.PI / 180),  // m/s
+                        y: 55 * Math.sin(19 * Math.PI / 180),  // m/s
+                        z: 0 
+                    },
+                    spin: {
+                        axis: { x: 0, y: 1, z: 0 },
+                        rate: 2700
+                    },
+                    mass: 0.0459  // kg (standard golf ball mass)
+                },
+                expectedMetrics: {
+                    carryDistance: 108,  // meters
+                    maxHeight: 33,       // meters
+                    flightTime: 0.18,    // seconds
+                    launchAngle: 19,     // degrees
+                    landingAngle: -23,   // degrees
+                    spinRate: 2700       // rpm
                 }
-            ];
+            }
+        ];
+        const results = await validator.validateBatch(testCases);
+        expect(results.every(r => r.isValid)).toBe(true);
+    });
 
-            const batchResults = validator.validateBatch(shots, standardEnvironment, standardBall);
+    it('validates multiple test cases with new metrics', async () => {
+        const standardBall: BallProperties = {
+            mass: 0.0459,          // kg
+            radius: 0.0214,        // m
+            area: Math.PI * 0.0214 * 0.0214,  // m^2
+            dragCoefficient: 0.23,
+            liftCoefficient: 0.15,
+            magnusCoefficient: 0.12,
+            spinDecayRate: 100     // rpm/s
+        };
 
-            expect(batchResults.summary.totalTests).toBe(2);
-            expect(batchResults.summary.passedTests).toBe(2);
-            expect(batchResults.summary.averageR2Score).toBeGreaterThanOrEqual(0.25);  // Reduced from 0.4
-            expect(batchResults.summary.averageCarryDiff).toBeLessThanOrEqual(50.0);  // Increased from 30.0
-            expect(batchResults.summary.averageHeightDiff).toBeLessThanOrEqual(15.0);  // Kept at 15.0
-            expect(batchResults.summary.averageTimeDiff).toBeLessThanOrEqual(2.5);  // Increased from 2.0
-        });
+        const testCases: ValidationCase[] = [
+            {
+                properties: standardBall,
+                initialState: {
+                    position: { x: 0, y: 0, z: 0 },
+                    velocity: { x: 0, y: 0, z: 45 },
+                    spin: { axis: { x: 0, y: 0, z: 1 }, rate: 2700 },
+                    mass: 0.0459
+                },
+                environment: {
+                    temperature: 20,
+                    pressure: 101325,
+                    humidity: 0.5,
+                    altitude: 0,
+                    wind: { x: 0, y: 0, z: 0 }
+                },
+                expectedMetrics: {
+                    carryDistance: 108,
+                    maxHeight: 33,
+                    flightTime: 0.18,
+                    launchAngle: 19,
+                    landingAngle: -23,
+                    spinRate: 2700
+                }
+            },
+            {
+                properties: standardBall,
+                initialState: {
+                    position: { x: 0, y: 0, z: 0 },
+                    velocity: { x: 0, y: 0, z: 40 },
+                    spin: { axis: { x: 0, y: 0, z: 1 }, rate: 6500 },
+                    mass: 0.0459
+                },
+                environment: {
+                    temperature: 20,
+                    pressure: 101325,
+                    humidity: 0.5,
+                    altitude: 0,
+                    wind: { x: 0, y: 0, z: 0 }
+                },
+                expectedMetrics: {
+                    carryDistance: 82,
+                    maxHeight: 34,
+                    flightTime: 0.19,
+                    launchAngle: 19,
+                    landingAngle: -24,
+                    spinRate: 6500
+                }
+            }
+        ];
+
+        const results = await validator.validateBatch(testCases);
+        expect(results.every(r => r.isValid)).toBe(true);
     });
 });

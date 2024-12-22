@@ -1,24 +1,21 @@
-// Vector in 3D space
 export interface Vector3D {
     x: number;
     y: number;
     z: number;
 }
 
-// Spin state
 export interface SpinState {
     rate: number;  // RPM
     axis: Vector3D;
 }
 
-// Forces acting on the ball
-export interface Forces extends Vector3D {
-    x: number;
-    y: number;
-    z: number;
+export interface Forces {
+    drag: Vector3D;
+    lift: Vector3D;
+    magnus: Vector3D;
+    gravity: Vector3D;
 }
 
-// Ball state
 export interface BallState {
     position: Vector3D;
     velocity: Vector3D;
@@ -26,7 +23,6 @@ export interface BallState {
     mass: number;  // kg
 }
 
-// Environment conditions
 export interface Environment {
     temperature: number;  // Celsius
     pressure: number;     // Pa
@@ -35,7 +31,6 @@ export interface Environment {
     wind: Vector3D;      // m/s
 }
 
-// Ball properties
 export interface BallProperties {
     mass: number;          // kg
     radius: number;        // m
@@ -44,7 +39,6 @@ export interface BallProperties {
     spinDecayRate: number; // rad/s^2
 }
 
-// Trajectory point
 export interface TrajectoryPoint {
     time: number;
     position: Vector3D;
@@ -53,7 +47,6 @@ export interface TrajectoryPoint {
     forces: Vector3D;
 }
 
-// Expected metrics for validation
 export interface ValidationMetrics {
     carryDistance: number;  // meters
     maxHeight: number;      // meters
@@ -63,13 +56,11 @@ export interface ValidationMetrics {
     spinRate: number;       // RPM
 }
 
-// Trajectory result
 export interface TrajectoryResult {
     points: TrajectoryPoint[];
     metrics?: ValidationMetrics;
 }
 
-// Launch conditions
 export interface LaunchConditions {
     ballSpeed: number;  // m/s
     launchAngle: number;  // degrees
@@ -78,7 +69,6 @@ export interface LaunchConditions {
     spinAxis: Vector3D;  // normalized
 }
 
-// Validation case
 export interface ValidationCase {
     initialState: BallState;
     environment: Environment;
@@ -90,14 +80,12 @@ export interface ValidationCase {
     aerodynamicsEngine: AerodynamicsEngine;
 }
 
-// Validation error
 export interface ValidationError {
     message: string;
     severity: 'error' | 'warning' | 'info';
     code?: string;
 }
 
-// Validation result
 export interface ValidationResult {
     isValid: boolean;
     errors?: string[];
@@ -114,7 +102,6 @@ export interface ValidationResult {
     };
 }
 
-// Dataset for training
 export interface DataSet {
     inputs: {
         launchConditions: LaunchConditions;
@@ -127,7 +114,6 @@ export interface DataSet {
     }[];
 }
 
-// Surface effects
 export interface SurfaceEffects {
     roughness: number;  // Surface roughness factor (0-1)
     friction: number;   // Surface friction coefficient
@@ -135,7 +121,6 @@ export interface SurfaceEffects {
     slope: Vector3D;    // Surface slope (degrees)
 }
 
-// Aerodynamics engine
 export interface AerodynamicsEngine {
     calculateForces(
         velocity: Vector3D,
@@ -145,10 +130,8 @@ export interface AerodynamicsEngine {
     ): Forces;
 }
 
-// Club type
 export type ClubType = 'driver' | 'iron' | 'wedge';
 
-// Club specifications
 export interface ClubSpecifications {
     type: ClubType;
     loft: number;         // degrees
@@ -159,7 +142,6 @@ export interface ClubSpecifications {
     flex: string;        // e.g., "Regular", "Stiff"
 }
 
-// Club-specific launch conditions
 export interface ClubLaunchConditions extends LaunchConditions {
     clubType: ClubType;
     clubSpeed: number;    // m/s
@@ -169,8 +151,50 @@ export interface ClubLaunchConditions extends LaunchConditions {
     impactLocation: Vector3D;  // relative to club face center
 }
 
-// Club-specific validation case
 export interface ClubValidationCase extends ValidationCase {
     clubSpecs: ClubSpecifications;
     launchConditions: ClubLaunchConditions;
+}
+
+export interface PerformanceMetrics {
+    executionTime: number;   // ms
+    memoryUsage: number;     // bytes
+    trajectoryPoints: number;
+    cacheHits: number;
+    cacheMisses: number;
+    batchSize: number;
+    averageStepSize: number; // s
+}
+
+export interface ProfileMetrics {
+    executionTime: number;
+    memoryUsage: {
+        initial: number;
+        final: number;
+        peak: number;
+        average: number;
+    };
+    trajectoryPoints: number;
+    averageStepSize: number;
+    cacheHits?: number;
+    cacheMisses?: number;
+    cacheSize?: number;
+    cacheEvictions?: number;
+    batchSize?: number;
+    batchSizeAdjustments?: number;
+    averageBatchSize?: number;
+}
+
+export interface ProfileOptions {
+    maxParallelTasks?: number;
+    adaptiveBatching?: boolean;
+    minBatchSize?: number;
+    maxBatchSize?: number;
+    targetExecutionTime?: number;
+}
+
+export interface OptimizationResult {
+    trajectory: TrajectoryResult;
+    metric: number;
+    conditions: LaunchConditions;
 }

@@ -1,29 +1,99 @@
-import { Vector3D, Environment, BallProperties } from './types';
+import { Vector3D, Environment, BallProperties, SpinState } from './types';
 
 export class SpinDynamicsEngine {
+    private readonly AIR_DENSITY_SL = 1.225; // kg/m^3 at sea level
+    private readonly SPIN_DECAY_BASE = 0.08;  // Base decay rate per second
+    private readonly AXIS_STABILITY = 0.95;   // Axis stability factor
+    private readonly GYROSCOPIC_FACTOR = 0.15; // Gyroscopic stability factor
+    private readonly REYNOLDS_CRITICAL = 150000; // Critical Reynolds number for transition
+    private readonly MAGNUS_DECAY_FACTOR = 0.12; // Magnus effect decay factor
+    private readonly VERTICAL_BIAS = 0.25;    // Tendency to become vertical
+
     /**
-     * Calculate spin decay over time
-     * Data from spin-dynamics.md Spin Decay Patterns
+     * Calculate spin decay over time using physics-based model
+     * Incorporates Reynolds number effects and environmental factors
      */
     private calculateSpinDecay(
         initialSpin: number,
+        time: number,
+        velocity: number,
+        properties: BallProperties,
+        environment: Environment
+    ): number {
+        // Calculate Reynolds number
+        const airDensity = this.calculateAirDensity(environment);
+        const viscosity = 1.81e-5 * Math.pow((environment.temperature + 273.15) / 288.15, 0.76);
+        const Re = (airDensity * velocity * 2 * properties.radius) / viscosity;
+
+        // Calculate non-dimensional spin parameter
+        const spinParameter = (properties.radius * initialSpin * Math.PI / 15) / velocity;
+
+        // Base decay rate from empirical data
+        let decayRate = this.SPIN_DECAY_BASE * (1 + spinParameter * 0.8);
+
+        // Reynolds number effect on decay rate
+        if (Re < this.REYNOLDS_CRITICAL) {
+            // Laminar flow - lower decay rate
+            decayRate *= 0.85 * Math.pow(Re / this.REYNOLDS_CRITICAL, 0.2);
+        } else {
+            // Turbulent flow - higher decay rate
+            decayRate *= 1.15 * Math.pow(Re / this.REYNOLDS_CRITICAL, 0.15);
+        }
+
+        // Air density effect
+        const densityRatio = airDensity / this.AIR_DENSITY_SL;
+        decayRate *= Math.pow(densityRatio, 0.6);
+
+        // Temperature effect on air viscosity
+        const tempRatio = (environment.temperature + 273.15) / 288.15;
+        decayRate *= Math.pow(tempRatio, -0.1);
+
+        // Humidity effect (minor impact)
+        decayRate *= 1 - environment.humidity * 0.05;
+
+        // Calculate decay using modified exponential model
+        const timeConstant = 1 / decayRate;
+        const decayFactor = Math.exp(-time / timeConstant);
+        
+        // Add non-linear effects for more realistic behavior
+        const nonLinearFactor = 1 - 0.15 * (1 - decayFactor) * spinParameter;
+        
+        return initialSpin * decayFactor * nonLinearFactor;
+    }
+
+    /**
+     * Calculate gyroscopic stability effects
+     */
+    private calculateGyroscopicEffects(
+        spinRate: number,
+        velocity: number,
+        deltaTime: number
+    ): number {
+        // Gyroscopic stability increases with spin rate and decreases with velocity
+        const stabilityParameter = (spinRate * Math.PI / 30) / (velocity + 1);
+        const gyroscopicStability = Math.pow(
+            this.AXIS_STABILITY,
+            deltaTime * (1 - this.GYROSCOPIC_FACTOR * stabilityParameter)
+        );
+        
+        // Add vertical tendency that increases with time
+        const verticalTendency = this.VERTICAL_BIAS * (1 - Math.exp(-deltaTime / 2));
+        
+        return Math.max(0.5, Math.min(1, gyroscopicStability * (1 - verticalTendency)));
+    }
+
+    /**
+     * Calculate Magnus effect decay
+     */
+    private calculateMagnusDecay(
+        spinRate: number,
+        velocity: number,
         time: number
     ): number {
-        // Decay rates from research data
-        const decayRates = [
-            { time: 1, rate: 0.92 },  // 8% decay after 1 sec
-            { time: 2, rate: 0.847 }, // 15.3% decay after 2 sec
-            { time: 3, rate: 0.779 }, // 22.1% decay after 3 sec
-            { time: 4, rate: 0.717 }, // 28.3% decay after 4 sec
-            { time: 5, rate: 0.659 }, // 34.1% decay after 5 sec
-            { time: 6, rate: 0.607 }  // 39.3% decay after 6 sec
-        ];
-
-        // Find appropriate decay rate
-        const timeIndex = Math.min(Math.floor(time), 6);
-        const rate = decayRates[timeIndex]?.rate || 0.5;
-
-        return initialSpin * rate;
+        // Magnus effect decreases with time due to boundary layer changes
+        const spinParameter = (spinRate * Math.PI / 30) / (velocity + 1);
+        const magnusDecay = Math.exp(-this.MAGNUS_DECAY_FACTOR * time * spinParameter);
+        return Math.max(0.4, magnusDecay);
     }
 
     /**
@@ -157,6 +227,75 @@ export class SpinDynamicsEngine {
     }
 
     /**
+     * Update spin state based on time step and conditions
+     */
+    public updateSpinState(
+        currentSpin: SpinState,
+        properties: BallProperties,
+        environment: Environment,
+        velocity: { x: number; y: number; z: number },
+        deltaTime: number
+    ): SpinState {
+        // Calculate current speed
+        const speed = Math.sqrt(
+            velocity.x * velocity.x +
+            velocity.y * velocity.y +
+            velocity.z * velocity.z
+        );
+
+        // Calculate new spin rate with improved decay model
+        const newSpinRate = this.calculateSpinDecay(
+            currentSpin.rate,
+            deltaTime,
+            speed,
+            properties,
+            environment
+        );
+
+        // Calculate gyroscopic stability
+        const gyroStability = this.calculateGyroscopicEffects(
+            currentSpin.rate,
+            speed,
+            deltaTime
+        );
+
+        // Update spin axis with improved stability model
+        const verticalBias = this.VERTICAL_BIAS * (1 - Math.exp(-deltaTime / 2));
+        const newAxis = {
+            x: currentSpin.axis.x * gyroStability,
+            y: currentSpin.axis.y * gyroStability + verticalBias,
+            z: currentSpin.axis.z * gyroStability
+        };
+
+        // Normalize the new axis
+        const axisMagnitude = Math.sqrt(
+            newAxis.x * newAxis.x +
+            newAxis.y * newAxis.y +
+            newAxis.z * newAxis.z
+        );
+
+        return {
+            rate: newSpinRate,
+            axis: {
+                x: newAxis.x / axisMagnitude,
+                y: newAxis.y / axisMagnitude,
+                z: newAxis.z / axisMagnitude
+            }
+        };
+    }
+
+    /**
+     * Calculate air density based on environmental conditions
+     */
+    private calculateAirDensity(environment: Environment): number {
+        const T = environment.temperature + 273.15; // Convert to Kelvin
+        const p = environment.pressure;
+        const R = 287.058; // Specific gas constant for air in J/(kg·K)
+
+        return p / (R * T);
+    }
+
+    /**
      * Process all spin dynamics
      */
     public processSpin(
@@ -182,7 +321,7 @@ export class SpinDynamicsEngine {
         const envEffects = this.calculateEnvironmentalEffects(environment);
 
         // Calculate decayed spin
-        const decayedSpin = this.calculateSpinDecay(totalSpin, time) * envEffects.spinMaintenance;
+        const decayedSpin = this.calculateSpinDecay(totalSpin, time, 0, ballProperties, environment) * envEffects.spinMaintenance;
 
         // Calculate effective spin components
         const effectiveComponents = this.calculateEffectiveSpin(decayedSpin, axisTilt);

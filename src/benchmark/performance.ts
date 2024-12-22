@@ -1,5 +1,5 @@
 import { FlightModel } from '../api/flight-model';
-import { Trajectory } from '../core/types';
+import { TrajectoryResult } from '../core/types';
 
 /**
  * Benchmark the flight model performance
@@ -14,11 +14,11 @@ export class PerformanceBenchmark {
     /**
      * Measure single shot performance
      */
-    public measureSingleShot(): {
+    public async measureSingleShot(): Promise<{
         executionTime: number;
         memoryUsage: number;
-        trajectory: Trajectory;
-    } {
+        trajectory: TrajectoryResult;
+    }> {
         const startTime = process.hrtime();
         const startMemory = process.memoryUsage().heapUsed;
 
@@ -28,11 +28,7 @@ export class PerformanceBenchmark {
         const ballProperties = this.model.generateRandomBallProperties();
 
         // Run simulation
-        const trajectory = this.model.simulateShot(
-            conditions,
-            environment,
-            ballProperties
-        );
+        const trajectory = await this.model.simulateShot(conditions, environment, ballProperties);
 
         // Calculate metrics
         const endTime = process.hrtime(startTime);
@@ -51,99 +47,66 @@ export class PerformanceBenchmark {
     /**
      * Measure batch performance
      */
-    public measureBatchPerformance(batchSize: number): {
-        averageExecutionTime: number;
-        averageMemoryUsage: number;
-        averageTrajectoryPoints: number;
-        totalExecutionTime: number;
-        totalMemoryUsage: number;
-    } {
+    public async measureBatch(batchSize: number): Promise<{
+        totalTime: number;
+        averageTime: number;
+        totalMemory: number;
+        averageMemory: number;
+        trajectories: TrajectoryResult[];
+    }> {
         const startTime = process.hrtime();
         const startMemory = process.memoryUsage().heapUsed;
 
-        // Generate and simulate batch
-        const trajectories = this.model.generateRandomDataset(batchSize);
+        // Run multiple simulations
+        const trajectories: TrajectoryResult[] = [];
+        for (let i = 0; i < batchSize; i++) {
+            const conditions = this.model.generateRandomConditions();
+            const environment = this.model.generateRandomEnvironment();
+            const ballProperties = this.model.generateRandomBallProperties();
+
+            const trajectory = await this.model.simulateShot(conditions, environment, ballProperties);
+            trajectories.push(trajectory);
+        }
 
         // Calculate metrics
         const endTime = process.hrtime(startTime);
         const endMemory = process.memoryUsage().heapUsed;
 
-        const totalExecutionTime = endTime[0] * 1000 + endTime[1] / 1000000;
-        const totalMemoryUsage = endMemory - startMemory;
-
-        // Calculate averages
-        const averageTrajectoryPoints = trajectories.reduce((sum, t) => sum + t.points.length, 0) / batchSize;
-        const averageExecutionTime = totalExecutionTime / batchSize;
-        const averageMemoryUsage = totalMemoryUsage / batchSize;
+        const totalTime = endTime[0] * 1000 + endTime[1] / 1000000; // Convert to milliseconds
+        const totalMemory = endMemory - startMemory;
 
         return {
-            averageExecutionTime,
-            averageMemoryUsage,
-            averageTrajectoryPoints,
-            totalExecutionTime,
-            totalMemoryUsage
-        };
-    }
-
-    /**
-     * Run complete benchmark suite
-     */
-    public runBenchmarkSuite(): {
-        singleShot: {
-            executionTime: number;
-            memoryUsage: number;
-            trajectory: Trajectory;
-        };
-        smallBatch: {
-            averageExecutionTime: number;
-            averageMemoryUsage: number;
-            averageTrajectoryPoints: number;
-            totalExecutionTime: number;
-            totalMemoryUsage: number;
-        };
-        largeBatch: {
-            averageExecutionTime: number;
-            averageMemoryUsage: number;
-            averageTrajectoryPoints: number;
-            totalExecutionTime: number;
-            totalMemoryUsage: number;
-        };
-    } {
-        return {
-            singleShot: this.measureSingleShot(),
-            smallBatch: this.measureBatchPerformance(100),
-            largeBatch: this.measureBatchPerformance(1000)
+            totalTime,
+            averageTime: totalTime / batchSize,
+            totalMemory,
+            averageMemory: totalMemory / batchSize,
+            trajectories
         };
     }
 }
 
 // Run benchmarks
-console.log('===================================================');
-console.log('Golf Ball Flight Model - Performance Benchmark');
-console.log('===================================================');
+async function runBenchmarks() {
+    console.log('===================================================');
+    console.log('Golf Ball Flight Model - Performance Benchmark');
+    console.log('===================================================');
 
-const benchmark = new PerformanceBenchmark();
-const results = benchmark.runBenchmarkSuite();
+    const benchmark = new PerformanceBenchmark();
 
-console.log('Single Shot Performance:');
-console.log('Execution Time:', results.singleShot.executionTime, 'ms');
-console.log('Memory Usage:', results.singleShot.memoryUsage, 'bytes');
-console.log('Trajectory Points:', results.singleShot.trajectory.points.length);
+    // Single shot performance
+    console.log('\nSingle Shot Performance:');
+    const singleResult = await benchmark.measureSingleShot();
+    console.log(`Execution Time: ${singleResult.executionTime.toFixed(2)} ms`);
+    console.log(`Memory Usage: ${(singleResult.memoryUsage / 1024).toFixed(2)} KB`);
 
-console.log();
+    // Batch performance
+    console.log('\nBatch Performance (100 shots):');
+    const batchResult = await benchmark.measureBatch(100);
+    console.log(`Total Time: ${batchResult.totalTime.toFixed(2)} ms`);
+    console.log(`Average Time per Shot: ${batchResult.averageTime.toFixed(2)} ms`);
+    console.log(`Total Memory: ${(batchResult.totalMemory / 1024).toFixed(2)} KB`);
+    console.log(`Average Memory per Shot: ${(batchResult.averageMemory / 1024).toFixed(2)} KB`);
+}
 
-console.log('Small Batch Performance (100 shots):');
-console.log('Average Execution Time:', results.smallBatch.averageExecutionTime, 'ms');
-console.log('Average Memory Usage:', results.smallBatch.averageMemoryUsage, 'bytes');
-console.log('Average Trajectory Points:', results.smallBatch.averageTrajectoryPoints);
-console.log('Total Execution Time:', results.smallBatch.totalExecutionTime, 'ms');
-console.log('Total Memory Usage:', results.smallBatch.totalMemoryUsage, 'bytes');
-
-console.log();
-
-console.log('Large Batch Performance (1000 shots):');
-console.log('Average Execution Time:', results.largeBatch.averageExecutionTime, 'ms');
-console.log('Average Memory Usage:', results.largeBatch.averageMemoryUsage, 'bytes');
-console.log('Average Trajectory Points:', results.largeBatch.averageTrajectoryPoints);
-console.log('Total Execution Time:', results.largeBatch.totalExecutionTime, 'ms');
-console.log('Total Memory Usage:', results.largeBatch.totalMemoryUsage, 'bytes');
+// Run benchmarks
+runBenchmarks().catch(console.error);

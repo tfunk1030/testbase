@@ -5,6 +5,13 @@ export class PerformanceOptimizer {
     private readonly integrator: FlightIntegrator;
     private readonly SIMULATION_STEPS = 1000;
     private readonly TIME_STEP = 0.001; // seconds
+    private readonly resultCache: Map<string, Trajectory> = new Map();
+    private readonly MAX_CACHE_SIZE = 1000;
+
+    // Optimization parameters
+    private readonly ANGLE_RANGE = { min: 0, max: 45, step: 2.5 };
+    private readonly SPIN_RANGE = { min: 1000, max: 5000, step: 250 };
+    private readonly BATCH_SIZE = 10;
 
     constructor() {
         this.integrator = new FlightIntegrator();
@@ -35,44 +42,223 @@ export class PerformanceOptimizer {
     }
 
     /**
-     * Optimize trajectory for maximum distance
+     * Generate cache key for trajectory
      */
-    public optimizeForDistance(
-        initialConditions: LaunchConditions,
+    private generateCacheKey(
+        conditions: LaunchConditions,
         environment: Environment,
-        ballProperties: BallProperties
-    ): Trajectory {
-        let bestTrajectory: Trajectory | null = null;
-        let maxDistance = 0;
+        properties: BallProperties
+    ): string {
+        return JSON.stringify({
+            speed: Math.round(conditions.ballSpeed * 100) / 100,
+            angle: Math.round(conditions.launchAngle * 10) / 10,
+            spin: Math.round(conditions.totalSpin / 100) * 100,
+            wind: Math.round(environment.wind.speed * 10) / 10,
+            temp: Math.round(environment.temperature),
+            humidity: Math.round(environment.humidity)
+        });
+    }
 
-        // Simple grid search for launch angle and spin
-        for (let angle = 0; angle <= 45; angle += 5) {
-            for (let spin = 1000; spin <= 5000; spin += 500) {
-                const conditions: LaunchConditions = {
-                    ...initialConditions,
+    /**
+     * Process a batch of trajectories in parallel
+     */
+    private async processBatch(
+        batch: LaunchConditions[],
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<{ trajectory: Trajectory; distance: number }[]> {
+        return Promise.all(
+            batch.map(async (conditions) => {
+                const cacheKey = this.generateCacheKey(conditions, environment, properties);
+                let trajectory = this.resultCache.get(cacheKey);
+
+                if (!trajectory) {
+                    const initialState = this.convertToInitialState(conditions, properties);
+                    trajectory = await this.integrator.simulateFlight(
+                        initialState,
+                        environment,
+                        properties,
+                        new AerodynamicsEngine()
+                    );
+
+                    // Cache result
+                    if (this.resultCache.size >= this.MAX_CACHE_SIZE) {
+                        const firstKey = this.resultCache.keys().next().value;
+                        this.resultCache.delete(firstKey);
+                    }
+                    this.resultCache.set(cacheKey, trajectory);
+                }
+
+                return {
+                    trajectory,
+                    distance: this.calculateDistance(trajectory)
+                };
+            })
+        );
+    }
+
+    /**
+     * Optimize trajectory using parallel grid search
+     */
+    private async gridSearch(
+        baseConditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties,
+        optimizationFunction: (t: Trajectory) => number
+    ): Promise<Trajectory> {
+        let bestTrajectory: Trajectory | null = null;
+        let bestMetric = 0;
+        const batch: LaunchConditions[] = [];
+
+        for (let angle = this.ANGLE_RANGE.min; angle <= this.ANGLE_RANGE.max; angle += this.ANGLE_RANGE.step) {
+            for (let spin = this.SPIN_RANGE.min; spin <= this.SPIN_RANGE.max; spin += this.SPIN_RANGE.step) {
+                batch.push({
+                    ...baseConditions,
                     launchAngle: angle,
                     totalSpin: spin
-                };
+                });
 
-                const initialState = this.convertToInitialState(conditions, ballProperties);
-                const trajectory = this.integrator.integrate(
-                    initialState,
-                    environment,
-                    ballProperties
-                );
-
-                const distance = this.calculateDistance(trajectory);
-                if (distance > maxDistance) {
-                    maxDistance = distance;
-                    bestTrajectory = trajectory;
+                if (batch.length >= this.BATCH_SIZE) {
+                    const results = await this.processBatch(batch, environment, properties);
+                    
+                    for (const result of results) {
+                        const metric = optimizationFunction(result.trajectory);
+                        if (metric > bestMetric) {
+                            bestMetric = metric;
+                            bestTrajectory = result.trajectory;
+                        }
+                    }
+                    
+                    batch.length = 0;
                 }
             }
         }
 
-        return bestTrajectory || this.integrator.integrate(
-            this.convertToInitialState(initialConditions, ballProperties),
+        // Process remaining trajectories
+        if (batch.length > 0) {
+            const results = await this.processBatch(batch, environment, properties);
+            for (const result of results) {
+                const metric = optimizationFunction(result.trajectory);
+                if (metric > bestMetric) {
+                    bestMetric = metric;
+                    bestTrajectory = result.trajectory;
+                }
+            }
+        }
+
+        return bestTrajectory || (await this.integrator.simulateFlight(
+            this.convertToInitialState(baseConditions, properties),
             environment,
-            ballProperties
+            properties,
+            new AerodynamicsEngine()
+        ));
+    }
+
+    /**
+     * Optimize trajectory for maximum distance
+     */
+    public async optimizeForDistance(
+        initialConditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<Trajectory> {
+        return this.gridSearch(
+            initialConditions,
+            environment,
+            properties,
+            (trajectory) => this.calculateDistance(trajectory)
+        );
+    }
+
+    /**
+     * Optimize trajectory for maximum carry
+     */
+    public async optimizeForCarry(
+        initialConditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<Trajectory> {
+        return this.gridSearch(
+            initialConditions,
+            environment,
+            properties,
+            (trajectory) => this.calculateCarry(trajectory)
+        );
+    }
+
+    /**
+     * Optimize trajectory for maximum height
+     */
+    public async optimizeForHeight(
+        initialConditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<Trajectory> {
+        return this.gridSearch(
+            initialConditions,
+            environment,
+            properties,
+            (trajectory) => trajectory.maxHeight || 0
+        );
+    }
+
+    /**
+     * Optimize trajectory for accuracy
+     */
+    public async optimizeForAccuracy(
+        initialConditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<Trajectory> {
+        // For accuracy, we want a lower, more controlled trajectory
+        const conditions: LaunchConditions = {
+            ...initialConditions,
+            launchAngle: Math.min(initialConditions.launchAngle, 20), // Cap launch angle
+            totalSpin: Math.min(initialConditions.totalSpin, 3000) // Cap spin rate
+        };
+
+        return this.integrator.simulateFlight(
+            this.convertToInitialState(conditions, properties),
+            environment,
+            properties,
+            new AerodynamicsEngine()
+        );
+    }
+
+    /**
+     * Optimize trajectory for given conditions
+     */
+    public async optimizeTrajectory(
+        conditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties,
+        targetMetric: 'distance' | 'height' | 'accuracy' = 'distance'
+    ): Promise<Trajectory> {
+        switch (targetMetric) {
+            case 'distance':
+                return this.optimizeForDistance(conditions, environment, properties);
+            case 'height':
+                return this.optimizeForHeight(conditions, environment, properties);
+            case 'accuracy':
+                return this.optimizeForAccuracy(conditions, environment, properties);
+            default:
+                return this.optimizeForDistance(conditions, environment, properties);
+        }
+    }
+
+    /**
+     * Batch process multiple trajectories
+     */
+    public async batchProcess(
+        conditions: LaunchConditions[],
+        environment: Environment,
+        properties: BallProperties,
+        targetMetric: 'distance' | 'height' | 'accuracy' = 'distance'
+    ): Promise<Trajectory[]> {
+        return Promise.all(
+            conditions.map(async (condition) => 
+                this.optimizeTrajectory(condition, environment, properties, targetMetric)
+            )
         );
     }
 
@@ -86,48 +272,6 @@ export class PerformanceOptimizer {
         return Math.sqrt(
             lastPoint.position.x * lastPoint.position.x +
             lastPoint.position.z * lastPoint.position.z
-        );
-    }
-
-    /**
-     * Optimize trajectory for maximum carry
-     */
-    public optimizeForCarry(
-        initialConditions: LaunchConditions,
-        environment: Environment,
-        ballProperties: BallProperties
-    ): Trajectory {
-        let bestTrajectory: Trajectory | null = null;
-        let maxCarry = 0;
-
-        // Simple grid search for launch angle and spin
-        for (let angle = 0; angle <= 45; angle += 5) {
-            for (let spin = 1000; spin <= 5000; spin += 500) {
-                const conditions: LaunchConditions = {
-                    ...initialConditions,
-                    launchAngle: angle,
-                    totalSpin: spin
-                };
-
-                const initialState = this.convertToInitialState(conditions, ballProperties);
-                const trajectory = this.integrator.integrate(
-                    initialState,
-                    environment,
-                    ballProperties
-                );
-
-                const carry = this.calculateCarry(trajectory);
-                if (carry > maxCarry) {
-                    maxCarry = carry;
-                    bestTrajectory = trajectory;
-                }
-            }
-        }
-
-        return bestTrajectory || this.integrator.integrate(
-            this.convertToInitialState(initialConditions, ballProperties),
-            environment,
-            ballProperties
         );
     }
 
@@ -151,103 +295,5 @@ export class PerformanceOptimizer {
         }
 
         return carryDistance;
-    }
-
-    /**
-     * Optimize trajectory for maximum height
-     */
-    public optimizeForHeight(
-        initialConditions: LaunchConditions,
-        environment: Environment,
-        ballProperties: BallProperties
-    ): Trajectory {
-        let bestTrajectory: Trajectory | null = null;
-        let maxHeight = 0;
-
-        // Simple grid search for launch angle and spin
-        for (let angle = 0; angle <= 60; angle += 5) {
-            for (let spin = 1000; spin <= 5000; spin += 500) {
-                const conditions: LaunchConditions = {
-                    ...initialConditions,
-                    launchAngle: angle,
-                    totalSpin: spin
-                };
-
-                const initialState = this.convertToInitialState(conditions, ballProperties);
-                const trajectory = this.integrator.integrate(
-                    initialState,
-                    environment,
-                    ballProperties
-                );
-
-                if (trajectory.maxHeight > maxHeight) {
-                    maxHeight = trajectory.maxHeight;
-                    bestTrajectory = trajectory;
-                }
-            }
-        }
-
-        return bestTrajectory || this.integrator.integrate(
-            this.convertToInitialState(initialConditions, ballProperties),
-            environment,
-            ballProperties
-        );
-    }
-
-    /**
-     * Optimize trajectory for accuracy
-     */
-    public optimizeForAccuracy(
-        initialConditions: LaunchConditions,
-        environment: Environment,
-        ballProperties: BallProperties
-    ): Trajectory {
-        // For accuracy, we want a lower, more controlled trajectory
-        const conditions: LaunchConditions = {
-            ...initialConditions,
-            launchAngle: Math.min(initialConditions.launchAngle, 20), // Cap launch angle
-            totalSpin: Math.min(initialConditions.totalSpin, 3000) // Cap spin rate
-        };
-
-        return this.integrator.integrate(
-            this.convertToInitialState(conditions, ballProperties),
-            environment,
-            ballProperties
-        );
-    }
-
-    /**
-     * Optimize trajectory for given conditions
-     */
-    public optimizeTrajectory(
-        conditions: LaunchConditions,
-        environment: Environment,
-        ballProperties: BallProperties,
-        targetMetric: 'distance' | 'height' | 'accuracy' = 'distance'
-    ): Trajectory {
-        switch (targetMetric) {
-            case 'distance':
-                return this.optimizeForDistance(conditions, environment, ballProperties);
-            case 'height':
-                return this.optimizeForHeight(conditions, environment, ballProperties);
-            case 'accuracy':
-                return this.optimizeForAccuracy(conditions, environment, ballProperties);
-            default:
-                return this.optimizeForDistance(conditions, environment, ballProperties);
-        }
-    }
-
-    /**
-     * Batch process multiple trajectories
-     */
-    public batchProcess(
-        conditions: LaunchConditions[],
-        environment: Environment,
-        ballProperties: BallProperties,
-        targetMetric: 'distance' | 'height' | 'accuracy' = 'distance'
-    ): Trajectory[] {
-        return conditions.map(condition => 
-            this.optimizeTrajectory(condition, environment, ballProperties, targetMetric)
-        );
     }
 }

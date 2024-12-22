@@ -1,189 +1,252 @@
 import {
-    LaunchConditions,
+    BallState,
     Environment,
     BallProperties,
-    Trajectory,
+    LaunchConditions,
     ValidationResult,
     DataSet,
-    SurfaceEffects
+    TrajectoryResult,
+    Vector3D
 } from '../core/types';
 import { ValidationSystem } from '../core/validation-system';
 import { FlightIntegrator } from '../core/flight-integrator';
-import { DataGenerator } from '../core/data-generator';
 
-/**
- * Simplified Flight Model API
- * 
- * A streamlined physics-based model for simulating golf ball trajectories
- * with professional-grade accuracy.
- * 
- * Features:
- * - Full 3D trajectory simulation
- * - Basic environmental effects
- * - Data generation for training
- * 
- * @version 1.0.0
- * @license MIT
- */
 export class FlightModel {
     private readonly validator: ValidationSystem;
-    private readonly integrator: FlightIntegrator;
-    private readonly dataGenerator: DataGenerator;
+    private readonly flightIntegrator: FlightIntegrator;
+
+    // Ball property ranges
+    private readonly MIN_MASS = 0.0456;  // kg (1.6 oz)
+    private readonly MAX_MASS = 0.0512;  // kg (1.8 oz)
+    private readonly MIN_RADIUS = 0.0213; // m (1.68 inches)
+    private readonly MAX_RADIUS = 0.0214; // m (1.69 inches)
+    private readonly MIN_CD = 0.15;
+    private readonly MAX_CD = 0.28;
+    private readonly MIN_CL = 0.15;
+    private readonly MAX_CL = 0.25;
+    private readonly MIN_SPIN_DECAY = 5;  // rpm/s
+    private readonly MAX_SPIN_DECAY = 15; // rpm/s
+
+    // Environment ranges
+    private readonly MIN_TEMP = -10;   // Celsius
+    private readonly MAX_TEMP = 40;    // Celsius
+    private readonly MIN_PRESSURE = 950;  // hPa
+    private readonly MAX_PRESSURE = 1050; // hPa
+    private readonly MIN_HUMIDITY = 0;    // percentage
+    private readonly MAX_HUMIDITY = 100;  // percentage
+    private readonly MIN_ALTITUDE = 0;    // meters
+    private readonly MAX_ALTITUDE = 3000; // meters
+    private readonly MAX_WIND = 20;       // m/s
 
     constructor() {
         this.validator = new ValidationSystem();
-        this.integrator = new FlightIntegrator();
-        this.dataGenerator = new DataGenerator();
+        this.flightIntegrator = new FlightIntegrator();
     }
 
     /**
-     * Simulate a single golf shot
-     * 
-     * @param conditions - Initial launch conditions
-     * @param environment - Environmental conditions
-     * @param ballProperties - Ball specifications
-     * @returns Complete trajectory with all data points
-     * 
-     * @example
-     * ```typescript
-     * const model = new FlightModel();
-     * const trajectory = model.simulateShot({
-     *     ballSpeed: 160,
-     *     launchAngle: 10.5,
-     *     launchDirection: 0,
-     *     totalSpin: 2800,
-     *     spinAxis: 0
-     * }, {
-     *     temperature: 70,
-     *     windSpeed: 0,
-     *     windDirection: 0,
-     *     altitude: 0,
-     *     humidity: 50,
-     *     pressure: 29.92
-     * }, {
-     *     compression: 90,
-     *     diameter: 1.68,
-     *     mass: 45.93,
-     *     dimpleCount: 352,
-     *     dimpleDepth: 0.01
-     * });
-     * ```
+     * Simulate a golf shot with given conditions
      */
-    public simulateShot(
-        conditions: LaunchConditions,
+    public async simulateFlight(
+        initialState: BallState,
         environment: Environment,
         ballProperties: BallProperties
-    ): Trajectory {
-        // Initialize ball state
-        const initialState = {
-            position: { x: 0, y: 0, z: 0 },
-            velocity: {
-                x: conditions.ballSpeed * Math.cos(conditions.launchAngle * Math.PI / 180),
-                y: conditions.ballSpeed * Math.sin(conditions.launchAngle * Math.PI / 180),
-                z: 0
-            },
-            spin: {
-                x: conditions.totalSpin * Math.cos(conditions.spinAxis * Math.PI / 180),
-                y: 0,
-                z: conditions.totalSpin * Math.sin(conditions.spinAxis * Math.PI / 180)
-            },
-            mass: ballProperties.mass
-        };
-
-        // Initialize surface effects
-        const surfaceEffects: SurfaceEffects = {
-            friction: 0.3,
-            restitution: 0.8,
-            rollResistance: 0.1,
-            bounceAngle: 45,
-            dragModifier: 1.0,
-            liftModifier: 1.0
-        };
+    ): Promise<TrajectoryResult> {
+        // Validate inputs
+        this.validateBallProperties(ballProperties);
+        this.validateEnvironment(environment);
+        this.validateInitialState(initialState);
 
         // Simulate flight
-        return this.integrator.integrate(
+        return this.flightIntegrator.simulateFlight(
             initialState,
             environment,
-            ballProperties,
-            surfaceEffects
+            ballProperties
         );
     }
 
     /**
-     * Validate a simulated trajectory
-     * 
-     * @param conditions - Initial launch conditions
-     * @param environment - Environmental conditions
-     * @param ballProperties - Ball specifications
-     * @param trajectory - Simulated trajectory
-     * @returns Validation result
+     * Simulate a golf shot with given launch conditions
      */
-    public validateTrajectory(
-        conditions: LaunchConditions,
+    public async simulateShot(
+        launchConditions: LaunchConditions,
         environment: Environment,
-        ballProperties: BallProperties,
-        trajectory: Trajectory
-    ): ValidationResult {
-        return this.validator.validate(
-            conditions,
-            environment,
-            ballProperties,
-            trajectory
-        );
+        ballProperties: BallProperties
+    ): Promise<TrajectoryResult> {
+        const initialState = this.convertToInitialState(launchConditions);
+        return this.simulateFlight(initialState, environment, ballProperties);
     }
 
     /**
-     * Generate random launch conditions
-     * 
-     * @returns Random launch conditions
+     * Simulate a golf shot with given initial state
      */
-    public generateRandomConditions(): LaunchConditions {
-        return this.dataGenerator.generateLaunchConditions();
-    }
-
-    /**
-     * Generate random environment
-     * 
-     * @returns Random environment
-     */
-    public generateRandomEnvironment(): Environment {
-        return this.dataGenerator.generateEnvironment();
+    public async simulateTrajectory(
+        initialState: BallState,
+        environment: Environment,
+        ballProperties: BallProperties
+    ): Promise<TrajectoryResult> {
+        return this.simulateFlight(initialState, environment, ballProperties);
     }
 
     /**
      * Generate random ball properties
-     * 
-     * @returns Random ball properties
      */
     public generateRandomBallProperties(): BallProperties {
-        return this.dataGenerator.generateBallProperties();
+        return {
+            mass: this.randomInRange(this.MIN_MASS, this.MAX_MASS),
+            radius: this.randomInRange(this.MIN_RADIUS, this.MAX_RADIUS),
+            dragCoefficient: this.randomInRange(this.MIN_CD, this.MAX_CD),
+            liftCoefficient: this.randomInRange(this.MIN_CL, this.MAX_CL),
+            spinDecayRate: this.randomInRange(this.MIN_SPIN_DECAY, this.MAX_SPIN_DECAY)
+        };
     }
 
     /**
-     * Generate random dataset
-     * 
-     * @param numSamples - Number of trajectories to generate (default: 100)
-     * @returns Array of trajectories
-     * 
-     * @example
-     * ```typescript
-     * const model = new FlightModel();
-     * const trajectories = model.generateRandomDataset(1000);
-     * ```
+     * Generate random environment conditions
      */
-    public generateRandomDataset(numSamples: number = 100): Trajectory[] {
-        const dataset: DataSet = this.dataGenerator.generateDataSet(numSamples);
-        const trajectories: Trajectory[] = [];
+    public generateRandomEnvironment(): Environment {
+        const windSpeed = Math.random() * this.MAX_WIND;
+        const windDirection = Math.random() * 2 * Math.PI;
 
-        for (const conditions of dataset.conditions) {
-            const trajectory = this.simulateShot(
-                conditions,
-                dataset.environment,
-                dataset.ballProperties
+        return {
+            temperature: this.randomInRange(this.MIN_TEMP, this.MAX_TEMP),
+            pressure: this.randomInRange(this.MIN_PRESSURE, this.MAX_PRESSURE),
+            humidity: this.randomInRange(this.MIN_HUMIDITY, this.MAX_HUMIDITY),
+            altitude: this.randomInRange(this.MIN_ALTITUDE, this.MAX_ALTITUDE),
+            wind: {
+                x: windSpeed * Math.cos(windDirection),
+                y: 0,  // Assuming horizontal wind only
+                z: windSpeed * Math.sin(windDirection)
+            }
+        };
+    }
+
+    /**
+     * Generate random launch conditions
+     */
+    public generateRandomConditions(): LaunchConditions {
+        return {
+            ballSpeed: this.randomInRange(30, 80),  // m/s
+            launchAngle: this.randomInRange(0, 30),  // degrees
+            launchDirection: this.randomInRange(-10, 10),  // degrees
+            spinRate: this.randomInRange(2000, 4000),  // rpm
+            spinAxis: this.generateRandomUnitVector()
+        };
+    }
+
+    /**
+     * Convert launch conditions to initial velocity vector
+     */
+    private convertToInitialState(launchConditions: LaunchConditions): BallState {
+        const speed = launchConditions.ballSpeed;
+        const launchAngleRad = launchConditions.launchAngle * Math.PI / 180;
+        const directionRad = launchConditions.launchDirection * Math.PI / 180;
+
+        return {
+            position: { x: 0, y: 0, z: 0 },
+            velocity: {
+                x: speed * Math.cos(launchAngleRad) * Math.cos(directionRad),
+                y: speed * Math.sin(launchAngleRad),
+                z: speed * Math.cos(launchAngleRad) * Math.sin(directionRad)
+            },
+            spin: {
+                rate: launchConditions.spinRate,
+                axis: launchConditions.spinAxis
+            },
+            mass: 0.0475 // default mass
+        };
+    }
+
+    /**
+     * Generate a random unit vector
+     */
+    private generateRandomUnitVector(): Vector3D {
+        const phi = Math.random() * 2 * Math.PI;
+        const cosTheta = Math.random() * 2 - 1;
+        const sinTheta = Math.sqrt(1 - cosTheta * cosTheta);
+
+        return {
+            x: sinTheta * Math.cos(phi),
+            y: sinTheta * Math.sin(phi),
+            z: cosTheta
+        };
+    }
+
+    /**
+     * Generate a random number in a range
+     */
+    private randomInRange(min: number, max: number): number {
+        return min + Math.random() * (max - min);
+    }
+
+    /**
+     * Validate a dataset against TrackMan data
+     */
+    public async validateDataset(dataset: DataSet): Promise<ValidationResult[]> {
+        const results: ValidationResult[] = [];
+
+        for (let i = 0; i < dataset.inputs.length; i++) {
+            const input = dataset.inputs[i];
+            const output = dataset.outputs[i];
+
+            const trajectory = await this.simulateShot(
+                input.launchConditions,
+                input.environment,
+                input.ballProperties
             );
-            trajectories.push(trajectory);
+
+            const validationCase = {
+                initialState: {
+                    position: { x: 0, y: 0, z: 0 },
+                    velocity: this.convertToInitialState(input.launchConditions).velocity,
+                    spin: {
+                        rate: input.launchConditions.spinRate,
+                        axis: input.launchConditions.spinAxis
+                    },
+                    mass: input.ballProperties.mass
+                },
+                environment: input.environment,
+                ballProperties: input.ballProperties,
+                expectedMetrics: output.metrics,
+                trajectory
+            };
+
+            const result = await this.validator.validateTrajectory(validationCase);
+            results.push(result);
         }
 
-        return trajectories;
+        return results;
+    }
+
+    /**
+     * Generate a random dataset for testing
+     */
+    public async generateRandomDataset(size: number): Promise<DataSet> {
+        const inputs: DataSet['inputs'] = [];
+        const outputs: DataSet['outputs'] = [];
+
+        for (let i = 0; i < size; i++) {
+            const launchConditions = this.generateRandomConditions();
+            const environment = this.generateRandomEnvironment();
+            const ballProperties = this.generateRandomBallProperties();
+
+            const trajectory = await this.simulateShot(
+                launchConditions,
+                environment,
+                ballProperties
+            );
+
+            inputs.push({
+                launchConditions,
+                environment,
+                ballProperties
+            });
+
+            outputs.push({
+                metrics: trajectory.metrics,
+                trajectory
+            });
+        }
+
+        return { inputs, outputs };
     }
 }
