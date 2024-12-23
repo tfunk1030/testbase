@@ -1,22 +1,26 @@
-import { TrajectoryResult, BallState, Environment, BallProperties } from './types';
+import { TrajectoryResult, BallState, Environment, BallProperties, LaunchConditions } from './types';
 import { PerformanceMonitor } from './performance-monitor';
 
 interface CacheEntry {
     trajectory: TrajectoryResult;
     timestamp: number;
     accessCount: number;
-    size: number;  // Approximate size in bytes
+    size: number;
+    frequency: number;
+    lastAccess: number;
 }
 
 export class CacheManager {
     private static instance: CacheManager;
     private readonly cache: Map<string, CacheEntry> = new Map();
     private readonly monitor = PerformanceMonitor.getInstance();
-    private readonly maxSize: number;  // Maximum cache size in bytes
-    private readonly maxAge: number;   // Maximum age in milliseconds
-    private readonly cleanupInterval: number;  // Cleanup interval in milliseconds
+    private readonly maxSize: number;
+    private readonly maxAge: number;
+    private readonly cleanupInterval: number;
     private currentSize: number = 0;
     private cleanupTimer: NodeJS.Timeout | null = null;
+    private readonly preloadPatterns: Set<string> = new Set();
+    private readonly frequencyWindow: number = 300000;
 
     private constructor(
         maxSizeMB: number = 100,
@@ -27,6 +31,7 @@ export class CacheManager {
         this.maxAge = maxAgeSeconds * 1000;
         this.cleanupInterval = cleanupIntervalSeconds * 1000;
         this.startCleanupTimer();
+        this.initializePreloadPatterns();
     }
 
     public static getInstance(): CacheManager {
@@ -36,6 +41,77 @@ export class CacheManager {
         return CacheManager.instance;
     }
 
+    private initializePreloadPatterns(): void {
+        const commonConditions = [
+            { speed: 160, angle: 12, spin: 2500 },
+            { speed: 130, angle: 16, spin: 3000 },
+            { speed: 120, angle: 20, spin: 3500 },
+            { speed: 100, angle: 26, spin: 4500 }
+        ];
+
+        commonConditions.forEach(condition => {
+            const pattern = this.generatePreloadPattern(condition);
+            this.preloadPatterns.add(pattern);
+        });
+    }
+
+    private generatePreloadPattern(condition: { speed: number, angle: number, spin: number }): string {
+        return `${condition.speed}_${condition.angle}_${condition.spin}`;
+    }
+
+    public async preloadCache(environment: Environment, properties: BallProperties): Promise<void> {
+        const preloadPromises: Promise<void>[] = [];
+
+        for (const pattern of this.preloadPatterns) {
+            const [speed, angle, spin] = pattern.split('_').map(Number);
+            const conditions: LaunchConditions = {
+                ballSpeed: speed,
+                launchAngle: angle,
+                spinRate: spin,
+                spinAxis: { x: 0, y: 1, z: 0 }
+            };
+
+            const promise = this.preloadTrajectory(conditions, environment, properties);
+            preloadPromises.push(promise);
+        }
+
+        await Promise.all(preloadPromises);
+    }
+
+    private async preloadTrajectory(
+        conditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<void> {
+        const key = this.generateCacheKey(conditions, environment, properties);
+        if (!this.cache.has(key)) {
+            const trajectory = await this.calculateTrajectory(conditions, environment, properties);
+            this.set(key, trajectory);
+        }
+    }
+
+    private generateCacheKey(
+        conditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties
+    ): string {
+        return JSON.stringify({
+            conditions,
+            environment: {
+                temperature: Math.round(environment.temperature),
+                pressure: Math.round(environment.pressure * 100) / 100,
+                humidity: Math.round(environment.humidity * 100) / 100,
+                altitude: Math.round(environment.altitude)
+            },
+            properties: {
+                mass: properties.mass,
+                diameter: properties.diameter,
+                cd: Math.round(properties.cd * 1000) / 1000,
+                cl: Math.round(properties.cl * 1000) / 1000
+            }
+        });
+    }
+
     public get(key: string, operationId: string): TrajectoryResult | null {
         const entry = this.cache.get(key);
         if (!entry) {
@@ -43,7 +119,8 @@ export class CacheManager {
             return null;
         }
 
-        const age = Date.now() - entry.timestamp;
+        const now = Date.now();
+        const age = now - entry.timestamp;
         if (age > this.maxAge) {
             this.cache.delete(key);
             this.currentSize -= entry.size;
@@ -52,7 +129,9 @@ export class CacheManager {
         }
 
         entry.accessCount++;
-        entry.timestamp = Date.now();
+        entry.lastAccess = now;
+        entry.frequency = entry.accessCount / ((now - entry.timestamp) / this.frequencyWindow);
+
         this.monitor.recordCacheHit(operationId);
         return entry.trajectory;
     }
@@ -60,115 +139,44 @@ export class CacheManager {
     public set(key: string, trajectory: TrajectoryResult): void {
         const size = this.calculateSize(trajectory);
 
-        // If single entry is too large, don't cache it
-        if (size > this.maxSize * 0.1) {
-            return;
-        }
-
-        // Make space if needed
         while (this.currentSize + size > this.maxSize) {
             if (!this.evictLeastValuable()) {
-                // If we can't evict anything, don't cache new entry
                 return;
             }
         }
 
-        const entry: CacheEntry = {
+        const now = Date.now();
+        this.cache.set(key, {
             trajectory,
-            timestamp: Date.now(),
+            timestamp: now,
+            lastAccess: now,
             accessCount: 1,
+            frequency: 1 / this.frequencyWindow,
             size
-        };
+        });
 
-        this.cache.set(key, entry);
         this.currentSize += size;
-    }
-
-    public generateKey(
-        state: BallState | null,
-        environment: Environment,
-        properties: BallProperties,
-        additionalParams: Record<string, any> = {}
-    ): string {
-        // Use a more compact key format
-        const keyObj = {
-            s: state ? {
-                p: this.roundVector(state.position, 2),
-                v: this.roundVector(state.velocity, 2),
-                s: {
-                    r: Math.round(state.spin.rate / 100) * 100,
-                    a: this.roundVector(state.spin.axis, 1)
-                }
-            } : null,
-            e: {
-                t: Math.round(environment.temperature),
-                p: Math.round(environment.pressure / 100) * 100,
-                h: Math.round(environment.humidity * 100) / 100,
-                w: this.roundVector(environment.wind, 1)
-            },
-            p: {
-                m: Math.round(properties.mass * 10000) / 10000,
-                r: Math.round(properties.radius * 10000) / 10000,
-                d: Math.round(properties.dragCoefficient * 100) / 100,
-                l: Math.round(properties.liftCoefficient * 100) / 100,
-                s: Math.round(properties.spinDecayRate * 100) / 100
-            },
-            ...additionalParams
-        };
-
-        return JSON.stringify(keyObj);
-    }
-
-    private roundVector(vec: { x: number, y: number, z: number }, decimals: number): { x: number, y: number, z: number } {
-        const factor = Math.pow(10, decimals);
-        return {
-            x: Math.round(vec.x * factor) / factor,
-            y: Math.round(vec.y * factor) / factor,
-            z: Math.round(vec.z * factor) / factor
-        };
-    }
-
-    private calculateSize(trajectory: TrajectoryResult): number {
-        // Approximate size calculation
-        let size = 0;
-        
-        // Add size for each trajectory point
-        for (const point of trajectory.points) {
-            // Vector3D = 3 numbers = 24 bytes
-            // SpinState = 1 number + Vector3D = 32 bytes
-            // Forces = 4 Vector3D = 96 bytes
-            // time = 8 bytes
-            size += (24 + 24 + 32 + 96 + 8);
-        }
-
-        // Add size for metrics if present
-        if (trajectory.metrics) {
-            size += 48;  // 6 numbers = 48 bytes
-        }
-
-        return size;
     }
 
     private evictLeastValuable(): boolean {
         let leastValuableKey: string | null = null;
-        let lowestValue = Infinity;
-
+        let minValue = Infinity;
         const now = Date.now();
-        for (const [key, entry] of this.cache.entries()) {
-            const age = now - entry.timestamp;
-            // Value = (hits per hour) / (size in KB)
-            const value = (entry.accessCount * 3600000 / age) / (entry.size / 1024);
 
-            if (value < lowestValue) {
-                lowestValue = value;
+        for (const [key, entry] of this.cache.entries()) {
+            const recency = (now - entry.lastAccess) / this.maxAge;
+            const value = entry.frequency / recency;
+
+            if (value < minValue) {
+                minValue = value;
                 leastValuableKey = key;
             }
         }
 
         if (leastValuableKey) {
             const entry = this.cache.get(leastValuableKey)!;
-            this.cache.delete(leastValuableKey);
             this.currentSize -= entry.size;
+            this.cache.delete(leastValuableKey);
             return true;
         }
 
@@ -187,12 +195,21 @@ export class CacheManager {
 
     private cleanup(): void {
         const now = Date.now();
+        let freedSpace = 0;
+        const entriesToRemove: string[] = [];
+
         for (const [key, entry] of this.cache.entries()) {
             if (now - entry.timestamp > this.maxAge) {
-                this.cache.delete(key);
-                this.currentSize -= entry.size;
+                entriesToRemove.push(key);
+                freedSpace += entry.size;
             }
         }
+
+        entriesToRemove.forEach(key => {
+            this.cache.delete(key);
+        });
+
+        this.currentSize -= freedSpace;
     }
 
     public clear(): void {
@@ -213,7 +230,7 @@ export class CacheManager {
         const now = Date.now();
 
         for (const entry of this.cache.values()) {
-            totalHits += entry.accessCount - 1; // Subtract first access
+            totalHits += entry.accessCount - 1;
             totalAccesses += entry.accessCount;
             totalAge += now - entry.timestamp;
         }
@@ -225,5 +242,28 @@ export class CacheManager {
             memoryUsage: this.currentSize,
             entryCount: this.cache.size
         };
+    }
+
+    private roundVector(vec: { x: number, y: number, z: number }, decimals: number): { x: number, y: number, z: number } {
+        const factor = Math.pow(10, decimals);
+        return {
+            x: Math.round(vec.x * factor) / factor,
+            y: Math.round(vec.y * factor) / factor,
+            z: Math.round(vec.z * factor) / factor
+        };
+    }
+
+    private calculateSize(trajectory: TrajectoryResult): number {
+        let size = 0;
+
+        for (const point of trajectory.points) {
+            size += (24 + 24 + 32 + 96 + 8);
+        }
+
+        if (trajectory.metrics) {
+            size += 48;
+        }
+
+        return size;
     }
 }

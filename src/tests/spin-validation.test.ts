@@ -151,4 +151,201 @@ describe('Spin Dynamics Validation', () => {
             });
         });
     });
+
+    describe('Spin Axis Normalization', () => {
+        it('should maintain normalized spin axis under all conditions', () => {
+            const testCases = [
+                { rate: 3000, axis: { x: 1, y: 0, z: 0 } },
+                { rate: 2500, axis: { x: 0.707, y: 0.707, z: 0 } },
+                { rate: 2000, axis: { x: 0.577, y: 0.577, z: 0.577 } },
+                { rate: 1500, axis: { x: 0, y: 1, z: 0 } },
+                { rate: 1000, axis: { x: 0, y: 0, z: 1 } }
+            ];
+
+            const velocities = [
+                { x: 30, y: 0, z: 0 },
+                { x: 45, y: 15, z: 0 },
+                { x: 60, y: -10, z: 5 }
+            ];
+
+            const timeSteps = [0.1, 0.5, 1.0, 2.0];
+
+            testCases.forEach(initialSpin => {
+                velocities.forEach(velocity => {
+                    timeSteps.forEach(time => {
+                        const newState = spinEngine.updateSpinState(
+                            initialSpin,
+                            standardBall,
+                            standardEnv,
+                            velocity,
+                            time
+                        );
+
+                        // Verify axis normalization
+                        const magnitude = Math.sqrt(
+                            newState.axis.x * newState.axis.x +
+                            newState.axis.y * newState.axis.y +
+                            newState.axis.z * newState.axis.z
+                        );
+                        expect(Math.abs(magnitude - 1)).toBeLessThan(1e-10);
+                    });
+                });
+            });
+        });
+    });
+
+    describe('Extreme Spin Conditions', () => {
+        it('should handle very high spin rates', () => {
+            const highSpinState: SpinState = {
+                rate: 8000,  // Very high spin rate
+                axis: { x: 0, y: 1, z: 0 }
+            };
+
+            const velocity = { x: 44.7, y: 0, z: 0 };
+            const time = 1.0;
+
+            const newState = spinEngine.updateSpinState(
+                highSpinState,
+                standardBall,
+                standardEnv,
+                velocity,
+                time
+            );
+
+            // Verify spin decay is reasonable
+            expect(newState.rate).toBeLessThan(highSpinState.rate);
+            expect(newState.rate).toBeGreaterThan(highSpinState.rate * 0.5);  // Not too much decay
+        });
+
+        it('should handle very low spin rates', () => {
+            const lowSpinState: SpinState = {
+                rate: 100,  // Very low spin rate
+                axis: { x: 0, y: 1, z: 0 }
+            };
+
+            const velocity = { x: 44.7, y: 0, z: 0 };
+            const time = 1.0;
+
+            const newState = spinEngine.updateSpinState(
+                lowSpinState,
+                standardBall,
+                standardEnv,
+                velocity,
+                time
+            );
+
+            // Verify spin behavior at low rates
+            expect(newState.rate).toBeLessThan(lowSpinState.rate);
+            expect(newState.rate).toBeGreaterThan(0);  // Should not go negative
+        });
+
+        it('should handle rapid axis changes', () => {
+            const initialSpin: SpinState = {
+                rate: 3000,
+                axis: { x: 1, y: 0, z: 0 }
+            };
+
+            const velocity = { x: 44.7, y: 0, z: 0 };
+            const dt = 0.01;
+            let currentState = { ...initialSpin };
+
+            // Simulate rapid axis changes
+            for (let i = 0; i < 100; i++) {
+                const angle = (i * Math.PI) / 50;  // Rotate axis
+                currentState.axis = {
+                    x: Math.cos(angle),
+                    y: Math.sin(angle),
+                    z: 0
+                };
+
+                const newState = spinEngine.updateSpinState(
+                    currentState,
+                    standardBall,
+                    standardEnv,
+                    velocity,
+                    dt
+                );
+
+                // Verify axis remains normalized
+                const magnitude = Math.sqrt(
+                    newState.axis.x * newState.axis.x +
+                    newState.axis.y * newState.axis.y +
+                    newState.axis.z * newState.axis.z
+                );
+                expect(Math.abs(magnitude - 1)).toBeLessThan(1e-10);
+
+                currentState = newState;
+            }
+        });
+    });
+
+    describe('Environmental Effects on Spin', () => {
+        it('should validate temperature effects on spin decay', () => {
+            const initialSpin: SpinState = {
+                rate: 3000,
+                axis: { x: 0, y: 1, z: 0 }
+            };
+
+            const velocity = { x: 44.7, y: 0, z: 0 };
+            const time = 1.0;
+            const temperatures = [-10, 0, 20, 40];  // °C
+            let previousDecay = 0;
+
+            temperatures.forEach(temp => {
+                const envAtTemp: Environment = {
+                    ...standardEnv,
+                    temperature: temp
+                };
+
+                const newState = spinEngine.updateSpinState(
+                    initialSpin,
+                    standardBall,
+                    envAtTemp,
+                    velocity,
+                    time
+                );
+
+                const decay = initialSpin.rate - newState.rate;
+                if (previousDecay > 0) {
+                    // Higher temperatures should lead to more decay
+                    expect(decay).toBeGreaterThan(previousDecay);
+                }
+                previousDecay = decay;
+            });
+        });
+
+        it('should validate humidity effects on spin decay', () => {
+            const initialSpin: SpinState = {
+                rate: 3000,
+                axis: { x: 0, y: 1, z: 0 }
+            };
+
+            const velocity = { x: 44.7, y: 0, z: 0 };
+            const time = 1.0;
+            const humidities = [0, 0.3, 0.6, 0.9];  // 0% to 90%
+            let previousDecay = 0;
+
+            humidities.forEach(humidity => {
+                const envWithHumidity: Environment = {
+                    ...standardEnv,
+                    humidity
+                };
+
+                const newState = spinEngine.updateSpinState(
+                    initialSpin,
+                    standardBall,
+                    envWithHumidity,
+                    velocity,
+                    time
+                );
+
+                const decay = initialSpin.rate - newState.rate;
+                if (previousDecay > 0) {
+                    // Higher humidity should lead to slightly less decay
+                    expect(decay).toBeLessThan(previousDecay);
+                }
+                previousDecay = decay;
+            });
+        });
+    });
 });

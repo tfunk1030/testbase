@@ -198,3 +198,35 @@ export interface OptimizationResult {
     metric: number;
     conditions: LaunchConditions;
 }
+
+export interface HardwareProfile {
+    cpuModel: string;
+    cpuCount: number;
+    cpuSpeed: number;
+    totalMemory: number;
+    freeMemory: number;
+    platform: string;
+    arch: string;
+}
+
+export interface PerformanceReport {
+    timestamp: string;
+    hardware: HardwareProfile;
+    batchPerformance: {
+        optimalBatchSize: number;
+        maxThroughput: number;
+        averageTimePerShot: number;
+        averageMemoryPerShot: number;
+    };
+    memoryHealth: {
+        hasLeak: boolean;
+        memoryGrowth: number;
+        averageGrowthRate: number;
+    };
+    cacheEfficiency: {
+        hits: number;
+        misses: number;
+        hitRate: number;
+    };
+    recommendations: string[];
+}
