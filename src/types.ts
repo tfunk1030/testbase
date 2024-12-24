@@ -5,8 +5,34 @@ export interface Vector3D {
 }
 
 export interface SpinState {
-    rate: number;  // RPM
     axis: Vector3D;
+    rate: number;  // RPM
+}
+
+export interface BallState {
+    position: Vector3D;
+    velocity: Vector3D;
+    spin: SpinState;
+    mass: number;
+}
+
+export interface BallProperties {
+    mass: number;          // kg
+    radius: number;        // m
+    area: number;          // m^2
+    dragCoefficient: number;
+    liftCoefficient: number;
+    magnusCoefficient: number;
+    spinDecayRate: number; // rad/s^2
+    construction?: string; // Ball construction type (e.g., '2-piece', '3-piece')
+}
+
+export interface Environment {
+    temperature: number;  // Celsius
+    pressure: number;    // hPa
+    humidity: number;    // %
+    altitude: number;    // m
+    wind: Vector3D;      // m/s
 }
 
 export interface Forces {
@@ -16,217 +42,105 @@ export interface Forces {
     gravity: Vector3D;
 }
 
-export interface BallState {
-    position: Vector3D;
-    velocity: Vector3D;
-    spin: SpinState;
-    mass: number;  // kg
-}
-
-export interface Environment {
-    temperature: number;  // Celsius
-    pressure: number;     // Pa
-    humidity: number;     // 0-1
-    altitude: number;     // meters
-    wind: Vector3D;      // m/s
-}
-
-export interface BallProperties {
-    mass: number;          // kg
-    radius: number;        // m
-    dragCoefficient: number;
-    liftCoefficient: number;
-    spinDecayRate: number; // rad/s^2
-}
-
 export interface TrajectoryPoint {
     time: number;
     position: Vector3D;
     velocity: Vector3D;
     spin: SpinState;
-    forces: Vector3D;
-}
-
-export interface ValidationMetrics {
-    carryDistance: number;  // meters
-    maxHeight: number;      // meters
-    flightTime: number;     // seconds
-    launchAngle: number;    // degrees
-    landingAngle: number;   // degrees
-    spinRate: number;       // RPM
+    forces: Forces;
 }
 
 export interface TrajectoryResult {
     points: TrajectoryPoint[];
-    metrics?: ValidationMetrics;
+    finalState: BallState;
+    metrics: TrajectoryMetrics;
 }
 
-export interface LaunchConditions {
-    ballSpeed: number;  // m/s
-    launchAngle: number;  // degrees
-    launchDirection: number;  // degrees
-    spinRate: number;  // rpm
-    spinAxis: Vector3D;  // normalized
+export interface TrajectoryMetrics {
+    carryDistance: number;
+    totalDistance: number;
+    maxHeight: number;
+    timeOfFlight: number;
+    spinRate: number;
+    launchAngle: number;
+    launchDirection: number;
+    ballSpeed: number;
+}
+
+export interface ValidationMetrics {
+    accuracy: number;
+    precision: number;
+    recall: number;
+    f1Score: number;
+    rmse: number;
+    mae: number;
 }
 
 export interface ValidationCase {
+    properties: BallProperties;
     initialState: BallState;
     environment: Environment;
-    properties: BallProperties;
-    expectedMetrics?: ValidationMetrics;
-    expectedTrajectory?: TrajectoryResult;
-    trajectory?: TrajectoryResult;
-    clubType?: ClubType;
-    aerodynamicsEngine: AerodynamicsEngine;
+    expectedMetrics: TrajectoryMetrics;
 }
 
-export interface ValidationError {
-    message: string;
-    severity: 'error' | 'warning' | 'info';
-    code?: string;
+export interface MemoryUsage {
+    heapTotal: number;
+    heapUsed: number;
+    external: number;
+    gc: GCMetrics[];
 }
 
-export interface ValidationResult {
-    isValid: boolean;
-    errors?: string[];
-    warnings?: string[];
-    metrics?: ValidationMetrics;
-    trajectory?: TrajectoryResult;
-    detailedMetrics?: {
-        carryDistanceError: number;
-        maxHeightError: number;
-        flightTimeError: number;
-        launchAngleError: number;
-        landingAngleError: number;
-        spinRateError: number;
+export interface GCMetrics {
+    type: string;
+    duration: number;
+    startTime: number;
+    endTime: number;
+}
+
+export interface ResourceMetrics {
+    timestamp: number;
+    cpu: {
+        usage: number;
+        kernelTime: number;
+        userTime: number;
     };
+    memory: MemoryUsage;
+    disk: {
+        total: number;
+        used: number;
+        free: number;
+    };
+    network: {
+        sent: number;
+        received: number;
+    };
+    io: {
+        reads: number;
+        writes: number;
+        readBytes: number;
+        writeBytes: number;
+    };
+}
+
+export interface LaunchConditions {
+    ballSpeed: number;
+    launchAngle: number;
+    launchDirection: number;
+    spinRate: number;
+    spinAxis: Vector3D;
 }
 
 export interface DataSet {
-    inputs: {
-        launchConditions: LaunchConditions;
-        environment: Environment;
-        ballProperties: BallProperties;
-    }[];
-    outputs: {
-        trajectory: TrajectoryResult;
-        metrics: ValidationMetrics;
-    }[];
+    id: string;
+    timestamp: number;
+    properties: BallProperties;
+    environment: Environment;
+    trajectories: TrajectoryResult[];
 }
 
-export interface SurfaceEffects {
-    roughness: number;  // Surface roughness factor (0-1)
-    friction: number;   // Surface friction coefficient
-    elasticity: number; // Coefficient of restitution
-    slope: Vector3D;    // Surface slope (degrees)
-}
-
-export interface AerodynamicsEngine {
-    calculateForces(
-        velocity: Vector3D,
-        spin: SpinState,
-        properties: BallProperties,
-        environment: Environment
-    ): Forces;
-}
-
-export type ClubType = 'driver' | 'iron' | 'wedge';
-
-export interface ClubSpecifications {
-    type: ClubType;
-    loft: number;         // degrees
-    lieAngle: number;     // degrees
-    length: number;       // inches
-    weight: number;       // grams
-    swingWeight: string;  // e.g., "D2"
-    flex: string;        // e.g., "Regular", "Stiff"
-}
-
-export interface ClubLaunchConditions extends LaunchConditions {
-    clubType: ClubType;
-    clubSpeed: number;    // m/s
-    attackAngle: number;  // degrees
-    pathAngle: number;    // degrees
-    faceAngle: number;    // degrees
-    impactLocation: Vector3D;  // relative to club face center
-}
-
-export interface ClubValidationCase extends ValidationCase {
-    clubSpecs: ClubSpecifications;
-    launchConditions: ClubLaunchConditions;
-}
-
-export interface PerformanceMetrics {
-    executionTime: number;   // ms
-    memoryUsage: number;     // bytes
-    trajectoryPoints: number;
-    cacheHits: number;
-    cacheMisses: number;
-    batchSize: number;
-    averageStepSize: number; // s
-}
-
-export interface ProfileMetrics {
-    executionTime: number;
-    memoryUsage: {
-        initial: number;
-        final: number;
-        peak: number;
-        average: number;
-    };
-    trajectoryPoints: number;
-    averageStepSize: number;
-    cacheHits?: number;
-    cacheMisses?: number;
-    cacheSize?: number;
-    cacheEvictions?: number;
-    batchSize?: number;
-    batchSizeAdjustments?: number;
-    averageBatchSize?: number;
-}
-
-export interface ProfileOptions {
-    maxParallelTasks?: number;
-    adaptiveBatching?: boolean;
-    minBatchSize?: number;
-    maxBatchSize?: number;
-    targetExecutionTime?: number;
-}
-
-export interface OptimizationResult {
-    trajectory: TrajectoryResult;
-    metric: number;
-    conditions: LaunchConditions;
-}
-
-export interface HardwareProfile {
-    cpuModel: string;
-    cpuCount: number;
-    cpuSpeed: number;
-    totalMemory: number;
-    freeMemory: number;
-    platform: string;
-    arch: string;
-}
-
-export interface PerformanceReport {
-    timestamp: string;
-    hardware: HardwareProfile;
-    batchPerformance: {
-        optimalBatchSize: number;
-        maxThroughput: number;
-        averageTimePerShot: number;
-        averageMemoryPerShot: number;
-    };
-    memoryHealth: {
-        hasLeak: boolean;
-        memoryGrowth: number;
-        averageGrowthRate: number;
-    };
-    cacheEfficiency: {
-        hits: number;
-        misses: number;
-        hitRate: number;
-    };
-    recommendations: string[];
+export interface ThreadStats {
+    id: number;
+    status: 'idle' | 'busy';
+    taskCount: number;
+    cpuUsage: number;
 }

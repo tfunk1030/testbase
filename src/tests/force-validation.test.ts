@@ -104,6 +104,20 @@ describe('Force Validation Tests', () => {
         spinDecayRate: 100     // rpm/s
     };
 
+    const standardState = {
+        velocity: { x: 67, y: 0, z: 0 },
+        spin: { rate: 2500, axis: { x: 0, y: 1, z: 0 } }
+    };
+
+    const standardForces = aero.calculateForces(
+        standardState.velocity,
+        standardState.spin,
+        standardBall,
+        standardEnv
+    );
+
+    const standardProps = standardBall;
+
     describe('Drag Coefficient Validation', () => {
         it('should match wind tunnel data for various Reynolds numbers', () => {
             const testCases = [
@@ -275,6 +289,49 @@ describe('Force Validation Tests', () => {
                 const approxYardageEffect = -forceDiff * 1.0936 / 9.81 * 0.95; // Convert force difference to yards with empirical scaling
 
                 expect(Math.abs(approxYardageEffect - expected)).toBeLessThan(tolerance);
+            });
+        });
+    });
+
+    describe('Weather System Integration', () => {
+        it('should correctly apply rain effects', () => {
+            const rainTestCases = [
+                {
+                    env: { ...standardEnv, humidity: 0.9 },  // Heavy rain
+                    expectedDistanceLoss: -0.09,
+                    expectedSpinChange: -0.15,
+                    tolerance: 0.15
+                },
+                {
+                    env: { ...standardEnv, humidity: 0.6 },  // Moderate rain
+                    expectedDistanceLoss: -0.055,
+                    expectedSpinChange: -0.10,
+                    tolerance: 0.15
+                }
+            ];
+
+            rainTestCases.forEach(testCase => {
+                const forces = aero.calculateForces(
+                    standardState.velocity,
+                    standardState.spin,
+                    standardProps,
+                    testCase.env
+                );
+
+                const dragMagnitude = Math.sqrt(
+                    forces.drag.x * forces.drag.x +
+                    forces.drag.y * forces.drag.y +
+                    forces.drag.z * forces.drag.z
+                );
+
+                const baseDrag = Math.sqrt(
+                    standardForces.drag.x * standardForces.drag.x +
+                    standardForces.drag.y * standardForces.drag.y +
+                    standardForces.drag.z * standardForces.drag.z
+                );
+
+                const dragChange = (dragMagnitude - baseDrag) / baseDrag;
+                expect(Math.abs(dragChange - testCase.expectedDistanceLoss)).toBeLessThan(testCase.tolerance);
             });
         });
     });

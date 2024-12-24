@@ -9,8 +9,86 @@ describe('TrackmanValidation', () => {
     let validator: TrackmanValidation;
     let testCase: ValidationCase;
 
+    const standardBall: BallProperties = {
+        mass: 0.0459,                // kg
+        radius: 0.0214,              // m
+        area: Math.PI * 0.0214 * 0.0214,  // m^2
+        dragCoefficient: 0.25,
+        liftCoefficient: 0.15,
+        magnusCoefficient: 0.23,
+        spinDecayRate: 0.15          // rad/s^2
+    };
+
+    const aerodynamicsEngine = new AerodynamicsEngineImpl();
+
+    const testCases: ValidationCase[] = [
+        {
+            properties: standardBall,
+            initialState: {
+                position: { x: 0, y: 0, z: 0 },
+                velocity: {
+                    x: 70 * Math.cos(19 * Math.PI / 180),
+                    y: 70 * Math.sin(19 * Math.PI / 180),
+                    z: 0
+                },
+                spin: {
+                    rate: 2700,
+                    axis: { x: 0, y: 1, z: 0 }
+                },
+                mass: standardBall.mass
+            },
+            environment: {
+                temperature: 20,
+                pressure: 1013.25,
+                humidity: 0.5,
+                altitude: 0,
+                wind: { x: 0, y: 0, z: 0 }
+            },
+            expectedMetrics: {
+                carryDistance: 108,
+                maxHeight: 33,
+                flightTime: 0.18,
+                launchAngle: 19,
+                landingAngle: -23,
+                spinRate: 2700
+            },
+            aerodynamicsEngine
+        },
+        {
+            properties: standardBall,
+            initialState: {
+                position: { x: 0, y: 0, z: 0 },
+                velocity: {
+                    x: 65 * Math.cos(19 * Math.PI / 180),
+                    y: 65 * Math.sin(19 * Math.PI / 180),
+                    z: 0
+                },
+                spin: {
+                    rate: 6500,
+                    axis: { x: 0, y: 1, z: 0 }
+                },
+                mass: standardBall.mass
+            },
+            environment: {
+                temperature: 20,
+                pressure: 1013.25,
+                humidity: 0.5,
+                altitude: 0,
+                wind: { x: 0, y: 0, z: 0 }
+            },
+            expectedMetrics: {
+                carryDistance: 82,
+                maxHeight: 34,
+                flightTime: 0.19,
+                launchAngle: 19,
+                landingAngle: -24,
+                spinRate: 6500
+            },
+            aerodynamicsEngine
+        }
+    ];
+
     beforeEach(() => {
-        aerodynamicsEngine = new AerodynamicsEngineImpl();
         flightIntegrator = new FlightIntegrator();
         validator = new TrackmanValidation(aerodynamicsEngine, flightIntegrator);
         
@@ -152,16 +230,6 @@ describe('TrackmanValidation', () => {
     });
 
     it('validates multiple test cases with new metrics', async () => {
-        const standardBall: BallProperties = {
-            mass: 0.0459,          // kg
-            radius: 0.0214,        // m
-            area: Math.PI * 0.0214 * 0.0214,  // m^2
-            dragCoefficient: 0.23,
-            liftCoefficient: 0.15,
-            magnusCoefficient: 0.12,
-            spinDecayRate: 100     // rpm/s
-        };
-
         const testCases: ValidationCase[] = [
             {
                 properties: standardBall,
@@ -215,5 +283,59 @@ describe('TrackmanValidation', () => {
 
         const results = await validator.validateBatch(testCases);
         expect(results.every(r => r.isValid)).toBe(true);
+    });
+
+    describe('Weather Condition Validation', () => {
+        const weatherTestCases = [
+            {
+                name: 'Heavy Rain',
+                environment: {
+                    ...testCase.environment,
+                    humidity: 0.9
+                },
+                expectedMetrics: {
+                    carryDistance: 109,  // ~10% reduction
+                    maxHeight: 20,
+                    flightTime: 0.14,
+                    launchAngle: 10,     // -2 degrees due to rain
+                    landingAngle: -13,
+                    spinRate: 2300       // ~15% spin reduction
+                }
+            },
+            {
+                name: 'Hot Day',
+                environment: {
+                    ...testCase.environment,
+                    temperature: 35  // 95°F
+                },
+                expectedMetrics: {
+                    carryDistance: 122,  // ~2% increase
+                    maxHeight: 23,
+                    flightTime: 0.15,
+                    launchAngle: 12,
+                    landingAngle: -14,
+                    spinRate: 2565       // ~5% spin reduction
+                }
+            }
+        ];
+
+        weatherTestCases.forEach(weatherCase => {
+            it(`validates trajectory under ${weatherCase.name} conditions`, async () => {
+                const weatherTestCase = {
+                    ...testCase,
+                    environment: weatherCase.environment,
+                    expectedMetrics: weatherCase.expectedMetrics
+                };
+
+                const result = await validator.validateCase(weatherTestCase);
+                expect(result.isValid).toBe(true);
+                
+                if (result.detailedMetrics) {
+                    expect(result.detailedMetrics.carryDistanceError).toBeLessThan(0.4);
+                    expect(result.detailedMetrics.maxHeightError).toBeLessThan(0.4);
+                    expect(result.detailedMetrics.spinRateError).toBeLessThan(0.4);
+                }
+            });
+        });
     });
 });
