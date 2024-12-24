@@ -1,14 +1,14 @@
-import { BallState, Environment, BallProperties, ValidationCase, TrajectoryPoint, TrajectoryResult, ValidationMetrics, ValidationResult, Vector3D, Forces } from './types';
+import { BallState, Environment, BallProperties, ValidationCase, TrajectoryPoint, TrajectoryResult, ValidationMetrics, ValidationResult, Vector3D, Forces, LaunchConditions } from './types';
 import { FlightIntegrator } from './flight-integrator';
 import { AerodynamicsEngine } from './aerodynamics';
 
 export class FlightModel {
-    private readonly flightIntegrator: FlightIntegrator;
     private readonly aerodynamicsEngine: AerodynamicsEngine;
+    private readonly flightIntegrator: FlightIntegrator;
 
-    constructor(aerodynamicsEngine: AerodynamicsEngine) {
-        this.flightIntegrator = new FlightIntegrator();
-        this.aerodynamicsEngine = aerodynamicsEngine;
+    constructor(aerodynamicsEngine?: AerodynamicsEngine) {
+        this.aerodynamicsEngine = aerodynamicsEngine || new AerodynamicsEngine();
+        this.flightIntegrator = new FlightIntegrator(this.aerodynamicsEngine);
     }
 
     public async simulateFlight(
@@ -20,12 +20,7 @@ export class FlightModel {
         this.validateInputs(initialState, environment, properties);
 
         // Simulate flight
-        return this.flightIntegrator.simulateFlight(
-            initialState,
-            environment,
-            properties,
-            this.aerodynamicsEngine
-        );
+        return this.flightIntegrator.integrate(initialState, environment, properties);
     }
 
     private validateInputs(
@@ -160,5 +155,67 @@ export class FlightModel {
 
     public async validateBatch(cases: ValidationCase[]): Promise<ValidationResult[]> {
         return Promise.all(cases.map(testCase => this.validateTrajectory(testCase)));
+    }
+
+    public generateRandomConditions(): LaunchConditions {
+        return {
+            ballSpeed: Math.random() * 50 + 30,  // 30-80 m/s
+            launchAngle: Math.random() * 30,     // 0-30 degrees
+            launchDirection: Math.random() * 360, // 0-360 degrees
+            spinRate: Math.random() * 5000 + 2000, // 2000-7000 rpm
+            spinAxis: {
+                x: Math.random() - 0.5,
+                y: Math.random() - 0.5,
+                z: Math.random() - 0.5
+            }
+        };
+    }
+
+    public generateRandomEnvironment(): Environment {
+        return {
+            temperature: Math.random() * 30 + 10,  // 10-40 C
+            pressure: Math.random() * 20 + 990,    // 990-1010 hPa
+            humidity: Math.random() * 100,         // 0-100%
+            altitude: Math.random() * 1000,        // 0-1000m
+            wind: {
+                x: Math.random() * 10 - 5,         // -5 to 5 m/s
+                y: 0,
+                z: Math.random() * 10 - 5
+            }
+        };
+    }
+
+    public generateRandomBallProperties(): BallProperties {
+        return {
+            mass: 0.0459,                // kg
+            radius: 0.0214,              // m
+            area: Math.PI * 0.0214 * 0.0214,  // m^2
+            dragCoefficient: 0.25,
+            liftCoefficient: 0.15,
+            magnusCoefficient: 0.23,
+            spinDecayRate: 0.15          // rad/s^2
+        };
+    }
+
+    public simulateShot(
+        conditions: LaunchConditions,
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<TrajectoryResult> {
+        const initialState: BallState = {
+            position: { x: 0, y: 0, z: 0 },
+            velocity: {
+                x: conditions.ballSpeed * Math.cos(conditions.launchAngle * Math.PI / 180) * Math.cos(conditions.launchDirection * Math.PI / 180),
+                y: conditions.ballSpeed * Math.sin(conditions.launchAngle * Math.PI / 180),
+                z: conditions.ballSpeed * Math.cos(conditions.launchAngle * Math.PI / 180) * Math.sin(conditions.launchDirection * Math.PI / 180)
+            },
+            spin: {
+                rate: conditions.spinRate,
+                axis: conditions.spinAxis
+            },
+            mass: properties.mass
+        };
+
+        return this.simulateFlight(initialState, environment, properties);
     }
 }

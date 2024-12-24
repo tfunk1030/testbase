@@ -1,5 +1,6 @@
 import { Vector3D, Forces, Environment, BallProperties, SpinState } from './types';
 import { WindEffectsEngine } from './wind-effects';
+import { WeatherSystem } from './weather-system';
 
 export interface AerodynamicsEngine {
     calculateForces(
@@ -13,7 +14,121 @@ export interface AerodynamicsEngine {
     ): Forces;
 }
 
-export class AerodynamicsEngineImpl implements AerodynamicsEngine {
+export class AerodynamicsEngine {
+    constructor() {
+        // Initialize default parameters
+    }
+
+    protected calculateAirDensity(altitude: number, temperature: number, humidity: number): number {
+        const standardPressure = 101325; // Pa at sea level
+        const pressureAltitude = standardPressure * Math.exp(-0.0001 * altitude);
+        const waterVaporPressure = humidity * 611.2 * Math.exp((17.67 * temperature)/(temperature + 243.5));
+        const dryAirDensity = pressureAltitude/(287.05 * (temperature + 273.15));
+        const waterVaporDensity = waterVaporPressure/(461.495 * (temperature + 273.15));
+        return dryAirDensity + waterVaporDensity;
+    }
+
+    public calculateForces(
+        velocity: Vector3D,
+        spin: SpinState,
+        properties: BallProperties,
+        environment: Environment
+    ): Forces {
+        const airDensity = this.calculateAirDensity(environment.altitude, environment.temperature, environment.humidity);
+        const relativeVelocity = this.calculateRelativeVelocity(velocity, environment.wind);
+        const speed = Math.sqrt(
+            relativeVelocity.x * relativeVelocity.x +
+            relativeVelocity.y * relativeVelocity.y +
+            relativeVelocity.z * relativeVelocity.z
+        );
+
+        // Calculate drag force
+        const dragForce = this.calculateDragForce(speed, relativeVelocity, properties, airDensity);
+
+        // Calculate lift force
+        const liftForce = this.calculateLiftForce(speed, relativeVelocity, properties, airDensity);
+
+        // Calculate Magnus force
+        const magnusForce = this.calculateMagnusForce(speed, relativeVelocity, spin, properties, airDensity);
+
+        // Calculate gravity
+        const gravity = this.calculateGravity(properties.mass);
+
+        return {
+            drag: dragForce,
+            lift: liftForce,
+            magnus: magnusForce,
+            gravity: gravity
+        };
+    }
+
+    private calculateRelativeVelocity(velocity: Vector3D, wind: Vector3D): Vector3D {
+        return {
+            x: velocity.x - wind.x,
+            y: velocity.y - wind.y,
+            z: velocity.z - wind.z
+        };
+    }
+
+    private calculateDragForce(
+        speed: number,
+        relativeVelocity: Vector3D,
+        properties: BallProperties,
+        airDensity: number
+    ): Vector3D {
+        const dragMagnitude = 0.5 * airDensity * speed * speed * properties.area * properties.dragCoefficient;
+        return {
+            x: -dragMagnitude * relativeVelocity.x / speed,
+            y: -dragMagnitude * relativeVelocity.y / speed,
+            z: -dragMagnitude * relativeVelocity.z / speed
+        };
+    }
+
+    private calculateLiftForce(
+        speed: number,
+        relativeVelocity: Vector3D,
+        properties: BallProperties,
+        airDensity: number
+    ): Vector3D {
+        const liftMagnitude = 0.5 * airDensity * speed * speed * properties.area * properties.liftCoefficient;
+        // Lift acts perpendicular to velocity
+        return {
+            x: -liftMagnitude * relativeVelocity.y / speed,
+            y: liftMagnitude * relativeVelocity.x / speed,
+            z: 0
+        };
+    }
+
+    private calculateMagnusForce(
+        speed: number,
+        relativeVelocity: Vector3D,
+        spin: SpinState,
+        properties: BallProperties,
+        airDensity: number
+    ): Vector3D {
+        const magnusMagnitude = 0.5 * airDensity * speed * speed * properties.area * properties.magnusCoefficient;
+        const spinRate = spin.rate * Math.PI / 30; // Convert RPM to rad/s
+        return {
+            x: magnusMagnitude * (spin.axis.y * relativeVelocity.z - spin.axis.z * relativeVelocity.y) * spinRate,
+            y: magnusMagnitude * (spin.axis.z * relativeVelocity.x - spin.axis.x * relativeVelocity.z) * spinRate,
+            z: magnusMagnitude * (spin.axis.x * relativeVelocity.y - spin.axis.y * relativeVelocity.x) * spinRate
+        };
+    }
+
+    private calculateGravity(mass: number): Vector3D {
+        return {
+            x: 0,
+            y: -9.81 * mass, // g = 9.81 m/s^2
+            z: 0
+        };
+    }
+}
+
+export class AerodynamicsEngineImpl extends AerodynamicsEngine {
+    constructor() {
+        super();
+    }
+
     private readonly rho = 1.225;  // kg/m^3 air density at sea level
     private readonly g = 9.81;     // m/s^2 gravitational acceleration
     private nu = 1.48e-5;         // m^2/s kinematic viscosity of air (mutable)
@@ -24,6 +139,7 @@ export class AerodynamicsEngineImpl implements AerodynamicsEngine {
     private readonly L = 0.0065;   // Standard temperature lapse rate in K/m
     private readonly mu_ref = 1.81e-5;  // Reference dynamic viscosity of air at 20°C
     private readonly windEffects = new WindEffectsEngine();
+    private readonly weatherSystem = new WeatherSystem();
 
     /**
      * Turbulence model parameters
@@ -300,6 +416,9 @@ export class AerodynamicsEngineImpl implements AerodynamicsEngine {
         position?: Vector3D,
         prevTurbulence?: Vector3D
     ): Forces {
+        // Get weather effects
+        const weatherEffects = this.weatherSystem.calculateWeatherEffects(environment);
+
         const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
         
         // Handle zero velocity case
@@ -336,7 +455,7 @@ export class AerodynamicsEngineImpl implements AerodynamicsEngine {
         const reynolds = speed * 2 * properties.radius / nu;
 
         // Calculate force coefficients with humidity effects
-        const cd = this.calculateDragCoefficient(reynolds, environment.humidity);
+        const cd = this.calculateDragCoefficient(reynolds, environment.humidity) * (1 + weatherEffects.distanceLoss);
         const cl = this.calculateLiftCoefficient(reynolds, environment.humidity);
         const cm = this.calculateMagnusCoefficient(
             reynolds,
@@ -376,6 +495,16 @@ export class AerodynamicsEngineImpl implements AerodynamicsEngine {
             liftDir.z /= liftMagn;
         }
 
+        // Apply weather effects to spin
+        const adjustedSpin = {
+            rate: spin.rate * (1 + weatherEffects.spinChange),
+            axis: spin.axis
+        };
+
+        // Calculate Magnus force with adjusted spin
+        const magnusCoeff = this.calculateMagnusCoefficient(reynolds, adjustedSpin.rate, speed, properties.radius);
+        const magnusMagnitude = 0.5 * rho * magnusCoeff * area * speed * speed;
+
         // Calculate forces
         const drag: Vector3D = {
             x: dragMag * dragDir.x,
@@ -390,9 +519,9 @@ export class AerodynamicsEngineImpl implements AerodynamicsEngine {
         };
 
         const magnus: Vector3D = {
-            x: magnusMag * (relativeVelocity.z * spin.axis.y - relativeVelocity.y * spin.axis.z) / speed,
-            y: magnusMag * (relativeVelocity.x * spin.axis.z - relativeVelocity.z * spin.axis.x) / speed,
-            z: magnusMag * (relativeVelocity.y * spin.axis.x - relativeVelocity.x * spin.axis.y) / speed
+            x: magnusMagnitude * (relativeVelocity.z * adjustedSpin.axis.y - relativeVelocity.y * adjustedSpin.axis.z) / speed,
+            y: magnusMagnitude * (relativeVelocity.x * adjustedSpin.axis.z - relativeVelocity.z * adjustedSpin.axis.x) / speed,
+            z: magnusMagnitude * (relativeVelocity.y * adjustedSpin.axis.x - relativeVelocity.x * adjustedSpin.axis.y) / speed
         };
 
         const gravity: Vector3D = {
@@ -415,8 +544,7 @@ export class AerodynamicsEngineImpl implements AerodynamicsEngine {
         const P = environment.pressure * 3386.39; // Convert inHg to Pascal
 
         // Calculate saturation vapor pressure using Buck equation (in Pa)
-        const es = 611.21 * Math.exp((17.502 * environment.temperature) / 
-                                   (240.97 + environment.temperature));
+        const es = 611.21 * Math.exp((17.502 * environment.temperature)/(240.97 + environment.temperature));
         
         // Calculate actual vapor pressure
         const e = es * environment.humidity / 100;

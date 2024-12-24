@@ -1,5 +1,6 @@
 import { TrajectoryResult, BallState, Environment, BallProperties, LaunchConditions } from './types';
 import { PerformanceMonitor } from './performance-monitor';
+import { CacheAnalytics } from './cache-analytics';
 
 interface CacheEntry {
     trajectory: TrajectoryResult;
@@ -14,6 +15,7 @@ export class CacheManager {
     private static instance: CacheManager;
     private readonly cache: Map<string, CacheEntry> = new Map();
     private readonly monitor = PerformanceMonitor.getInstance();
+    private readonly analytics = CacheAnalytics.getInstance();
     private readonly maxSize: number;
     private readonly maxAge: number;
     private readonly cleanupInterval: number;
@@ -113,9 +115,12 @@ export class CacheManager {
     }
 
     public get(key: string, operationId: string): TrajectoryResult | null {
+        const startTime = performance.now();
         const entry = this.cache.get(key);
+        
         if (!entry) {
             this.monitor.recordCacheMiss(operationId);
+            this.analytics.recordAccess(key, false, 0);
             return null;
         }
 
@@ -125,6 +130,8 @@ export class CacheManager {
             this.cache.delete(key);
             this.currentSize -= entry.size;
             this.monitor.recordCacheMiss(operationId);
+            this.analytics.recordEviction(key);
+            this.analytics.recordAccess(key, false, entry.size);
             return null;
         }
 
@@ -133,11 +140,39 @@ export class CacheManager {
         entry.frequency = entry.accessCount / ((now - entry.timestamp) / this.frequencyWindow);
 
         this.monitor.recordCacheHit(operationId);
+        this.analytics.recordAccess(key, true, entry.size);
+        
+        this.analytics.recordMemoryUsage({
+            total: process.memoryUsage().heapTotal,
+            used: process.memoryUsage().heapUsed,
+            timestamp: new Date()
+        });
+        
         return entry.trajectory;
     }
 
     public set(key: string, trajectory: TrajectoryResult): void {
         const size = this.calculateSize(trajectory);
+
+        const recommendations = this.analytics.getRecommendations();
+        const evictionRecommendations = recommendations
+            .filter(r => r.type === 'evict')
+            .map(r => r.suggestedAction.split(':')[0].trim());
+
+        if (this.currentSize + size > this.maxSize) {
+            for (const evictKey of evictionRecommendations) {
+                if (this.cache.has(evictKey)) {
+                    const entry = this.cache.get(evictKey)!;
+                    this.cache.delete(evictKey);
+                    this.currentSize -= entry.size;
+                    this.analytics.recordEviction(evictKey);
+                    
+                    if (this.currentSize + size <= this.maxSize) {
+                        break;
+                    }
+                }
+            }
+        }
 
         while (this.currentSize + size > this.maxSize) {
             if (!this.evictLeastValuable()) {
@@ -156,27 +191,42 @@ export class CacheManager {
         });
 
         this.currentSize += size;
+        
+        this.analytics.recordMemoryUsage({
+            total: process.memoryUsage().heapTotal,
+            used: process.memoryUsage().heapUsed,
+            timestamp: new Date()
+        });
     }
 
     private evictLeastValuable(): boolean {
-        let leastValuableKey: string | null = null;
+        let leastValuable: [string, CacheEntry] | null = null;
         let minValue = Infinity;
-        const now = Date.now();
+
+        const recommendations = this.analytics.getRecommendations();
+        const evictionScores = recommendations
+            .filter(r => r.type === 'evict')
+            .reduce((acc, r) => {
+                const [key, score] = r.suggestedAction.split(':').map(s => s.trim());
+                acc[key] = parseFloat(score);
+                return acc;
+            }, {} as Record<string, number>);
 
         for (const [key, entry] of this.cache.entries()) {
-            const recency = (now - entry.lastAccess) / this.maxAge;
-            const value = entry.frequency / recency;
-
+            const age = Date.now() - entry.timestamp;
+            const analyticsScore = evictionScores[key] || 0;
+            const value = (entry.frequency * (this.maxAge - age) / entry.size) - analyticsScore;
             if (value < minValue) {
                 minValue = value;
-                leastValuableKey = key;
+                leastValuable = [key, entry];
             }
         }
 
-        if (leastValuableKey) {
-            const entry = this.cache.get(leastValuableKey)!;
+        if (leastValuable) {
+            const [key, entry] = leastValuable;
+            this.cache.delete(key);
             this.currentSize -= entry.size;
-            this.cache.delete(leastValuableKey);
+            this.analytics.recordEviction(key);
             return true;
         }
 
@@ -194,22 +244,19 @@ export class CacheManager {
     }
 
     private cleanup(): void {
+        const startTime = performance.now();
         const now = Date.now();
-        let freedSpace = 0;
-        const entriesToRemove: string[] = [];
+        let removedCount = 0;
 
         for (const [key, entry] of this.cache.entries()) {
             if (now - entry.timestamp > this.maxAge) {
-                entriesToRemove.push(key);
-                freedSpace += entry.size;
+                this.cache.delete(key);
+                this.currentSize -= entry.size;
+                removedCount++;
             }
         }
 
-        entriesToRemove.forEach(key => {
-            this.cache.delete(key);
-        });
-
-        this.currentSize -= freedSpace;
+        this.analytics.recordCleanup(performance.now() - startTime);
     }
 
     public clear(): void {
@@ -244,6 +291,10 @@ export class CacheManager {
         };
     }
 
+    public getEntries(): CacheEntry[] {
+        return Array.from(this.cache.values());
+    }
+
     private roundVector(vec: { x: number, y: number, z: number }, decimals: number): { x: number, y: number, z: number } {
         const factor = Math.pow(10, decimals);
         return {
@@ -265,5 +316,20 @@ export class CacheManager {
         }
 
         return size;
+    }
+
+    private extractPattern(key: string): string {
+        // Extract the general pattern from the cache key
+        // Example: "v=70,a=12,s=2500" -> "v=70-80,a=10-15,s=2000-3000"
+        const parts = key.split(',');
+        return parts.map(part => {
+            const [name, value] = part.split('=');
+            const num = parseFloat(value);
+            if (isNaN(num)) return part;
+            
+            // Create range buckets
+            const bucket = Math.floor(num / 10) * 10;
+            return `${name}=${bucket}-${bucket + 10}`;
+        }).join(',');
     }
 }

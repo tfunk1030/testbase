@@ -62,11 +62,10 @@ export class FlightIntegrator implements IFlightIntegrator {
         let dt = this.maxDt;
 
         // Store initial point
-        const initialForces = aerodynamicsEngine.calculateForces(
-            this.k1State.velocity,
-            this.k1State.spin,
-            properties,
-            environment
+        const initialForces = this.calculateForces(
+            this.k1State,
+            environment,
+            properties
         );
 
         points.push(this.createTrajectoryPoint(this.k1State, initialForces, t));
@@ -137,11 +136,10 @@ export class FlightIntegrator implements IFlightIntegrator {
                 finalVelocity = impactState.velocity;
                 finalTime = impactTime;
 
-                const finalForces = aerodynamicsEngine.calculateForces(
-                    finalVelocity,
-                    impactState.spin,
-                    properties,
-                    environment
+                const finalForces = this.calculateForces(
+                    impactState,
+                    environment,
+                    properties
                 );
 
                 points.push(this.createTrajectoryPoint(
@@ -158,11 +156,10 @@ export class FlightIntegrator implements IFlightIntegrator {
 
             // Store point if significant change
             if (this.shouldStorePoint(points, this.k1State)) {
-                const forces = aerodynamicsEngine.calculateForces(
-                    this.k1State.velocity,
-                    this.k1State.spin,
-                    properties,
-                    environment
+                const forces = this.calculateForces(
+                    this.k1State,
+                    environment,
+                    properties
                 );
 
                 points.push(this.createTrajectoryPoint(this.k1State, forces, t + dt));
@@ -244,25 +241,38 @@ export class FlightIntegrator implements IFlightIntegrator {
         };
     }
 
+    private calculateForces(
+        state: BallState,
+        environment: Environment,
+        properties: BallProperties
+    ): Forces {
+        return this.aerodynamicsEngine.calculateForces(
+            state.velocity,
+            state.spin,
+            properties,
+            environment
+        );
+    }
+
+    private calculateAcceleration(forces: Forces, properties: BallProperties): Vector3D {
+        const g = 9.81; // m/s^2
+        return {
+            x: forces.drag.x / properties.mass + forces.lift.x / properties.mass + forces.magnus.x / properties.mass,
+            y: forces.drag.y / properties.mass + forces.lift.y / properties.mass + forces.magnus.y / properties.mass - g,
+            z: forces.drag.z / properties.mass + forces.lift.z / properties.mass + forces.magnus.z / properties.mass
+        };
+    }
+
     private calculateDerivatives(
         state: BallState,
         environment: Environment,
         properties: BallProperties,
         aerodynamicsEngine: AerodynamicsEngine
     ): { position: Vector3D; velocity: Vector3D } {
-        const forces = aerodynamicsEngine.calculateForces(
-            state.velocity,
-            state.spin,
-            properties,
-            environment
-        );
+        const forces = this.calculateForces(state, environment, properties);
 
         // Calculate acceleration from forces
-        const acceleration = {
-            x: forces.x / properties.mass,
-            y: forces.y / properties.mass,
-            z: forces.z / properties.mass
-        };
+        const acceleration = this.calculateAcceleration(forces, properties);
 
         return {
             position: { ...state.velocity },
@@ -454,6 +464,81 @@ export class FlightIntegrator implements IFlightIntegrator {
             x: (p2.position.x - p1.position.x) / (p2.time - p1.time),
             y: (p2.position.y - p1.position.y) / (p2.time - p1.time),
             z: (p2.position.z - p1.position.z) / (p2.time - p1.time)
+        };
+    }
+
+    public async integrate(
+        initialState: BallState,
+        environment: Environment,
+        properties: BallProperties
+    ): Promise<TrajectoryResult> {
+        const dt = 0.001;  // 1ms timestep
+        const maxTime = 10; // 10s max simulation time
+        const points: TrajectoryPoint[] = [];
+        
+        let currentState = { ...initialState };
+        let currentTime = 0;
+        let maxHeight = 0;
+
+        while (currentTime < maxTime && currentState.position.y >= 0) {
+            // Calculate forces
+            const forces = this.calculateForces(currentState, environment, properties);
+            
+            // Calculate acceleration
+            const acceleration = this.calculateAcceleration(forces, properties);
+            
+            // Update velocity
+            currentState.velocity = {
+                x: currentState.velocity.x + acceleration.x * dt,
+                y: currentState.velocity.y + acceleration.y * dt,
+                z: currentState.velocity.z + acceleration.z * dt
+            };
+            
+            // Update position
+            currentState.position = {
+                x: currentState.position.x + currentState.velocity.x * dt,
+                y: currentState.position.y + currentState.velocity.y * dt,
+                z: currentState.position.z + currentState.velocity.z * dt
+            };
+            
+            // Update spin (decay)
+            currentState.spin.rate *= (1 - properties.spinDecayRate * dt);
+            
+            // Record point
+            points.push({
+                time: currentTime,
+                position: { ...currentState.position },
+                velocity: { ...currentState.velocity },
+                spin: { ...currentState.spin },
+                forces: { ...forces }
+            });
+            
+            // Update max height
+            maxHeight = Math.max(maxHeight, currentState.position.y);
+            
+            currentTime += dt;
+        }
+        
+        // Calculate metrics
+        const metrics = {
+            carryDistance: Math.sqrt(
+                Math.pow(points[points.length - 1].position.x - points[0].position.x, 2) +
+                Math.pow(points[points.length - 1].position.z - points[0].position.z, 2)
+            ),
+            maxHeight: maxHeight,
+            flightTime: currentTime,
+            launchAngle: Math.atan2(points[0].velocity.y, 
+                Math.sqrt(Math.pow(points[0].velocity.x, 2) + Math.pow(points[0].velocity.z, 2))
+            ) * 180 / Math.PI,
+            landingAngle: Math.atan2(points[points.length - 1].velocity.y,
+                Math.sqrt(Math.pow(points[points.length - 1].velocity.x, 2) + Math.pow(points[points.length - 1].velocity.z, 2))
+            ) * 180 / Math.PI,
+            spinRate: initialState.spin.rate
+        };
+
+        return {
+            points,
+            metrics
         };
     }
 

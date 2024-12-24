@@ -11,11 +11,54 @@ export interface SpinState {
     axis: Vector3D;
 }
 
+// Memory usage metrics
+export interface MemoryUsage {
+    total: number;
+    used: number;
+    free: number;
+    heapTotal: number;
+    heapUsed: number;
+    external: number;
+    gc: {
+        collections: number;
+        pauseTime: number;
+        type: string;
+    }[];
+}
+
+// Resource metrics
+export interface ResourceMetrics {
+    cpu: {
+        usage: number;
+        kernelTime: number;
+        userTime: number;
+    };
+    memory: MemoryUsage;
+    io: {
+        reads: number;
+        writes: number;
+        bytesRead: number;
+        bytesWritten: number;
+    };
+}
+
 // Forces acting on the ball
-export interface Forces extends Vector3D {
-    x: number;
-    y: number;
-    z: number;
+export interface Forces {
+    drag: Vector3D;
+    lift: Vector3D;
+    magnus: Vector3D;
+    gravity: Vector3D;
+}
+
+// Ball properties
+export interface BallProperties {
+    mass: number;
+    radius: number;
+    area: number;
+    dragCoefficient: number;
+    liftCoefficient: number;
+    magnusCoefficient: number;
+    spinDecayRate: number;
 }
 
 // Ball state
@@ -35,22 +78,13 @@ export interface Environment {
     wind: Vector3D;      // m/s
 }
 
-// Ball properties
-export interface BallProperties {
-    mass: number;          // kg
-    radius: number;        // m
-    dragCoefficient: number;
-    liftCoefficient: number;
-    spinDecayRate: number; // rad/s^2
-}
-
 // Trajectory point
 export interface TrajectoryPoint {
     time: number;
     position: Vector3D;
     velocity: Vector3D;
     spin: SpinState;
-    forces: Vector3D;
+    forces: Forces;
 }
 
 // Expected metrics for validation
