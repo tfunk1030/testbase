@@ -1,4 +1,4 @@
-import { ValidationCase, ValidationResult, Environment, BallState, BallProperties } from '../types';
+import { ValidationCase, Environment, BallState, BallProperties, TrajectoryMetrics, TrajectoryResult } from '../types';
 import { AerodynamicsEngineImpl } from '../core/aerodynamics';
 import { FlightIntegrator } from '../core/flight-integrator';
 import { weatherValidationCases } from './weather-validation';
@@ -22,12 +22,10 @@ interface ValidationSuiteResults {
 }
 
 export class ValidationSuite {
-    private readonly aero: AerodynamicsEngineImpl;
     private readonly integrator: FlightIntegrator;
     private readonly tolerance = 0.4; // 40% tolerance as per requirements
 
     constructor() {
-        this.aero = new AerodynamicsEngineImpl();
         this.integrator = new FlightIntegrator();
     }
 
@@ -69,11 +67,10 @@ export class ValidationSuite {
             results.totalTests++;
 
             try {
-                const trajectory = await this.integrator.simulateFlight(
+                const trajectory = await this.integrator.integrate(
                     testCase.initialState,
                     testCase.environment,
-                    testCase.properties,
-                    this.aero
+                    testCase.properties
                 );
 
                 const passed = this.validateMetrics(testCase.expectedMetrics, trajectory.metrics);
@@ -99,7 +96,7 @@ export class ValidationSuite {
                 results.results.push({
                     testName: `${testSetName} - ${this.getTestDescription(testCase)}`,
                     passed: false,
-                    error: error.message
+                    error: error instanceof Error ? error.message : 'Unknown error occurred'
                 });
             }
         }
@@ -166,8 +163,10 @@ export class ValidationSuite {
         const baseBallProperties: BallProperties = {
             radius: 0.02135,
             mass: 0.0459,
+            area: Math.PI * 0.02135 * 0.02135,
             dragCoefficient: 0.23,
             liftCoefficient: 0.15,
+            magnusCoefficient: 0.23,
             spinDecayRate: 0.08
         };
 
@@ -182,10 +181,13 @@ export class ValidationSuite {
                 properties: baseBallProperties,
                 expectedMetrics: {
                     carryDistance: 230,
+                    totalDistance: 245,
                     maxHeight: 28,
-                    flightTime: 5.8,
+                    timeOfFlight: 5.8,
+                    spinRate: 1500,
                     launchAngle: 23,
-                    landingAngle: -35
+                    launchDirection: 0,
+                    ballSpeed: 70
                 }
             },
             // High spin case
@@ -198,10 +200,13 @@ export class ValidationSuite {
                 properties: baseBallProperties,
                 expectedMetrics: {
                     carryDistance: 235,
+                    totalDistance: 250,
                     maxHeight: 35,
-                    flightTime: 6.4,
+                    timeOfFlight: 6.4,
+                    spinRate: 3500,
                     launchAngle: 23,
-                    landingAngle: -40
+                    launchDirection: 0,
+                    ballSpeed: 70
                 }
             }
         ];

@@ -2,30 +2,27 @@ import { Vector3D, Forces, Environment, BallProperties, SpinState } from './type
 import { WindEffectsEngine } from './wind-effects';
 import { WeatherSystem } from './weather-system';
 
-export interface AerodynamicsEngine {
-    calculateForces(
-        velocity: Vector3D,
-        spin: SpinState,
-        properties: BallProperties,
-        environment: Environment,
-        dt?: number,
-        position?: Vector3D,
-        prevTurbulence?: Vector3D
-    ): Forces;
-}
+import { IAerodynamicsEngine } from '../types';
 
-export class AerodynamicsEngine {
+export class AerodynamicsEngine implements IAerodynamicsEngine {
     constructor() {
         // Initialize default parameters
     }
 
-    protected calculateAirDensity(altitude: number, temperature: number, humidity: number): number {
-        const standardPressure = 101325; // Pa at sea level
-        const pressureAltitude = standardPressure * Math.exp(-0.0001 * altitude);
-        const waterVaporPressure = humidity * 611.2 * Math.exp((17.67 * temperature)/(temperature + 243.5));
-        const dryAirDensity = pressureAltitude/(287.05 * (temperature + 273.15));
-        const waterVaporDensity = waterVaporPressure/(461.495 * (temperature + 273.15));
-        return dryAirDensity + waterVaporDensity;
+    protected calculateAirDensity(environment: Environment): number {
+        // Constants
+        const R = 287.058;  // Gas constant for dry air, J/(kg·K)
+        const T = environment.temperature + 273.15; // Convert to Kelvin
+        const P = environment.pressure; // Pascal
+
+        // Calculate saturation vapor pressure using Buck equation (in Pa)
+        const es = 611.21 * Math.exp((17.502 * environment.temperature)/(240.97 + environment.temperature));
+        
+        // Calculate actual vapor pressure
+        const e = es * environment.humidity;
+
+        // Calculate density using ideal gas law with humidity correction
+        return (P - e)/(R * T);
     }
 
     public calculateForces(
@@ -34,7 +31,7 @@ export class AerodynamicsEngine {
         properties: BallProperties,
         environment: Environment
     ): Forces {
-        const airDensity = this.calculateAirDensity(environment.altitude, environment.temperature, environment.humidity);
+        const airDensity = this.calculateAirDensity(environment);
         const relativeVelocity = this.calculateRelativeVelocity(velocity, environment.wind);
         const speed = Math.sqrt(
             relativeVelocity.x * relativeVelocity.x +

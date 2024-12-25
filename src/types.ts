@@ -42,11 +42,8 @@ export interface Forces {
     gravity: Vector3D;
 }
 
-export interface TrajectoryPoint {
+export interface TrajectoryPoint extends BallState {
     time: number;
-    position: Vector3D;
-    velocity: Vector3D;
-    spin: SpinState;
     forces: Forces;
 }
 
@@ -67,13 +64,19 @@ export interface TrajectoryMetrics {
     ballSpeed: number;
 }
 
-export interface ValidationMetrics {
-    accuracy: number;
-    precision: number;
-    recall: number;
-    f1Score: number;
-    rmse: number;
-    mae: number;
+export interface ValidationMetrics extends TrajectoryMetrics {
+    accuracy?: number;
+    precision?: number;
+    recall?: number;
+    f1Score?: number;
+    rmse?: number;
+    mae?: number;
+}
+
+export interface ValidationResult {
+    isValid: boolean;
+    errors: string[];
+    trajectory: TrajectoryResult;
 }
 
 export interface ValidationCase {
@@ -81,6 +84,19 @@ export interface ValidationCase {
     initialState: BallState;
     environment: Environment;
     expectedMetrics: TrajectoryMetrics;
+    aerodynamicsEngine?: IAerodynamicsEngine;
+}
+
+export interface IAerodynamicsEngine {
+    calculateForces(
+        velocity: Vector3D,
+        spin: SpinState,
+        properties: BallProperties,
+        environment: Environment,
+        dt?: number,
+        position?: Vector3D,
+        prevTurbulence?: Vector3D
+    ): Forces;
 }
 
 export interface MemoryUsage {
