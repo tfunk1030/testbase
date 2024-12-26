@@ -1,12 +1,17 @@
 import * as tf from '@tensorflow/tfjs-node-gpu';
 import { RealTimeMonitor } from '../real-time-monitor';
 import { HardwareMonitor } from '../hardware/hardware-monitor';
+import { MemoryManager } from './memory-manager';
+import { DeviceManager } from './device-manager';
+import { PerformanceMonitor } from './performance-monitor';
 
 interface GPUInfo {
     name: string;
     memorySize: number;
     computeCapability: string;
     isAvailable: boolean;
+    webGLVersion: 1 | 2;
+    maxTextureSize: number;
 }
 
 interface ComputeOptions {
@@ -14,24 +19,62 @@ interface ComputeOptions {
     batchSize?: number;
     useAsync?: boolean;
     timeout?: number;
+    useTensorPool?: boolean;
+    enablePipelineCache?: boolean;
+    validateShapes?: boolean;
+}
+
+interface TensorShape {
+    dims: number[];
+    dtype: 'float32' | 'int32';
+}
+
+class TensorPool {
+    private static pools: Map<string, tf.Tensor[]> = new Map();
+    
+    static acquire(shape: number[], dtype: string = 'float32'): tf.Tensor {
+        const key = `${shape.join('x')}_${dtype}`;
+        const pool = this.pools.get(key) || [];
+        return pool.pop() || tf.zeros(shape, dtype as 'float32');
+    }
+    
+    static release(tensor: tf.Tensor): void {
+        const key = `${tensor.shape.join('x')}_${tensor.dtype}`;
+        const pool = this.pools.get(key) || [];
+        pool.push(tensor);
+        this.pools.set(key, pool);
+    }
 }
 
 export class GPUCompute {
     private static instance: GPUCompute;
     private readonly monitor: RealTimeMonitor;
     private readonly hardwareMonitor: HardwareMonitor;
+    private readonly memoryManager: MemoryManager;
+    private readonly deviceManager: DeviceManager;
+    private readonly performanceMonitor: PerformanceMonitor;
     private gpuInfo: GPUInfo | null = null;
     private isInitialized: boolean = false;
     private defaultOptions: Required<ComputeOptions> = {
         precision: 'high',
         batchSize: 128,
         useAsync: true,
-        timeout: 30000
+        timeout: 30000,
+        useTensorPool: true,
+        enablePipelineCache: true,
+        validateShapes: true
     };
+    private tensorPool: TensorPool;
+    private pipelineCache: Map<string, tf.Tensor> = new Map();
+    private webGLVersion: 1 | 2 = 1;
 
     private constructor() {
         this.monitor = RealTimeMonitor.getInstance();
         this.hardwareMonitor = HardwareMonitor.getInstance();
+        this.memoryManager = MemoryManager.getInstance();
+        this.deviceManager = DeviceManager.getInstance();
+        this.performanceMonitor = PerformanceMonitor.getInstance();
+        this.tensorPool = new TensorPool();
     }
 
     public static getInstance(): GPUCompute {
@@ -77,7 +120,9 @@ export class GPUCompute {
                 name: 'No GPU Available',
                 memorySize: 0,
                 computeCapability: 'none',
-                isAvailable: false
+                isAvailable: false,
+                webGLVersion: 1,
+                maxTextureSize: 0
             };
         }
 
@@ -88,13 +133,23 @@ export class GPUCompute {
                 'Unknown GPU',
             memorySize: this.estimateGPUMemory(gl),
             computeCapability: this.getComputeCapability(gl),
-            isAvailable: true
+            isAvailable: true,
+            webGLVersion: this.webGLVersion,
+            maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)
         };
     }
 
-    private async getWebGLContext(): Promise<WebGLRenderingContext | null> {
+    private async getWebGLContext(): Promise<WebGLRenderingContext | WebGL2RenderingContext | null> {
         try {
             const canvas = new OffscreenCanvas(1, 1);
+            // Try WebGL2 first
+            const gl2 = canvas.getContext('webgl2');
+            if (gl2) {
+                this.webGLVersion = 2;
+                return gl2;
+            }
+            // Fall back to WebGL1
+            this.webGLVersion = 1;
             return canvas.getContext('webgl') || null;
         } catch {
             return null;
@@ -130,34 +185,92 @@ export class GPUCompute {
 
         const opts = { ...this.defaultOptions, ...options };
         const batchSize = this.optimizeBatchSize(opts.batchSize);
+        const startTime = performance.now();
 
-        // Convert input to tensors
-        const stateTensors = initialStates.map(state => 
-            tf.tensor2d(state, [1, state.length])
-        );
+        try {
+            // Pre-allocate batch tensors if using tensor pool
+            const results: Float32Array[] = [];
+            await tf.tidy(async () => {
+                for (let i = 0; i < initialStates.length; i += batchSize) {
+                    const batch = initialStates.slice(i, i + batchSize);
+                    let batchTensor: tf.Tensor2D;
+                    
+                    // Validate shapes if enabled
+                    if (opts.validateShapes) {
+                        this.validateBatchShapes(batch);
+                    }
+                    
+                    // Use tensor pooling if enabled
+                    if (opts.useTensorPool) {
+                        batchTensor = this.tensorPool.acquire([batch.length, batch[0].length]) as tf.Tensor2D;
+                        batchTensor.assign(tf.concat(batch.map(state => tf.tensor2d(state, [1, state.length])), 0));
+                    } else {
+                        batchTensor = tf.concat(batch.map(state => tf.tensor2d(state, [1, state.length])), 0);
+                    }
 
-        // Batch processing
-        const results: Float32Array[] = [];
-        for (let i = 0; i < stateTensors.length; i += batchSize) {
-            const batch = stateTensors.slice(i, i + batchSize);
-            const batchTensor = tf.concat(batch, 0);
+                    try {
+                        // Use pipeline caching if enabled
+                        const cacheKey = `${batchTensor.shape.join('x')}_${opts.precision}`;
+                        let computed: tf.Tensor2D;
+                        const computeStartTime = performance.now();
+                        
+                        if (opts.enablePipelineCache && this.pipelineCache.has(cacheKey)) {
+                            computed = this.pipelineCache.get(cacheKey) as tf.Tensor2D;
+                            this.performanceMonitor.recordPipelineStats(true, performance.now() - computeStartTime);
+                        } else {
+                            computed = await this.computeBatch(batchTensor, opts);
+                            if (opts.enablePipelineCache) {
+                                this.pipelineCache.set(cacheKey, computed.clone());
+                            }
+                            this.performanceMonitor.recordPipelineStats(false, performance.now() - computeStartTime);
+                        }
 
-            // Apply physics computations
-            const computed = await this.computeBatch(batchTensor, opts);
-            
-            // Extract results
-            const batchResults = await computed.array();
-            results.push(...batchResults.map(r => new Float32Array(r)));
+                        const batchResults = await computed.array();
+                        results.push(...batchResults.map(r => new Float32Array(r)));
 
-            // Cleanup
-            tf.dispose([batchTensor, computed]);
-            batch.forEach(t => tf.dispose(t));
+                        // Release tensors back to pool
+                        if (opts.useTensorPool) {
+                            this.tensorPool.release(batchTensor);
+                            this.tensorPool.release(computed);
+                        }
+                    } catch (error) {
+                        // Clean up on error
+                        if (opts.useTensorPool) {
+                            this.tensorPool.release(batchTensor);
+                        }
+                        throw error;
+                    }
+                }
+            });
+
+            return results;
+        } catch (error) {
+            this.monitor.emit('computeError', {
+                error: error instanceof Error ? error.message : 'Unknown error',
+                timestamp: new Date().toISOString()
+            });
+            throw error;
+        } finally {
+            const endTime = performance.now();
+            this.monitor.emit('computeComplete', {
+                duration: endTime - startTime,
+                batchSize,
+                options: opts
+            });
+        }
+    }
+
+    private validateBatchShapes(batch: Float32Array[]): void {
+        if (batch.length === 0) {
+            throw new Error('Empty batch provided');
         }
 
-        // Cleanup input tensors
-        stateTensors.forEach(t => tf.dispose(t));
-
-        return results;
+        const expectedLength = batch[0].length;
+        const invalidStates = batch.filter(state => state.length !== expectedLength);
+        
+        if (invalidStates.length > 0) {
+            throw new Error(`Inconsistent state dimensions. Expected length ${expectedLength}, found states with lengths: ${invalidStates.map(s => s.length).join(', ')}`);
+        }
     }
 
     private async computeBatch(
@@ -228,11 +341,15 @@ export class GPUCompute {
         isAvailable: boolean;
         info: GPUInfo | null;
         memoryUsage?: number;
+        tensorPoolSize?: number;
+        pipelineCacheSize?: number;
     } {
         return {
             isAvailable: this.isInitialized && this.gpuInfo?.isAvailable,
             info: this.gpuInfo,
-            memoryUsage: undefined // WebGL doesn't provide memory usage info
+            memoryUsage: tf.memory().numBytes,
+            tensorPoolSize: TensorPool.pools?.size,
+            pipelineCacheSize: this.pipelineCache.size
         };
     }
 
