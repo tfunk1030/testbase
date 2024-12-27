@@ -1,43 +1,26 @@
-import * as tf from '@tensorflow/tfjs-node-gpu';
-import { GPUCompute } from './gpu-compute';
-import { HardwareMonitor } from '../hardware/hardware-monitor';
+import * as tf from '@tensorflow/tfjs';
+import { DeviceError } from './gpu-compute';
 
-interface Device {
-    id: string;
-    name: string;
-    type: 'gpu' | 'cpu';
-    capabilities: {
-        computeCapability?: string;
-        memorySize: number;
-        cores?: number;
-        clockSpeed?: number;
-    };
-    status: 'available' | 'busy' | 'error';
-    load: number;
-    temperature?: number;
+export interface DevicePreference {
+    preferGPU?: boolean;
+    minMemory?: number;  // In bytes
+    maxLoad?: number;    // 0-1 range
 }
 
-interface DevicePreference {
-    preferGPU?: boolean;
-    minMemory?: number;
-    minComputeCapability?: string;
-    maxLoad?: number;
-    maxTemperature?: number;
+export interface DeviceInfo {
+    type: string;
+    memory: {
+        total: number;
+        free: number;
+    };
+    load: number;
 }
 
 export class DeviceManager {
     private static instance: DeviceManager;
-    private readonly gpuCompute: GPUCompute;
-    private readonly hardwareMonitor: HardwareMonitor;
-    private devices: Map<string, Device> = new Map();
-    private activeDevice: Device | null = null;
-    private fallbackEnabled: boolean = true;
+    private currentDevice: string | null = null;
 
-    private constructor() {
-        this.gpuCompute = GPUCompute.getInstance();
-        this.hardwareMonitor = HardwareMonitor.getInstance();
-        this.initialize();
-    }
+    private constructor() {}
 
     public static getInstance(): DeviceManager {
         if (!DeviceManager.instance) {
@@ -46,228 +29,126 @@ export class DeviceManager {
         return DeviceManager.instance;
     }
 
-    private async initialize(): Promise<void> {
-        try {
-            // Detect available devices
-            await this.detectDevices();
+    public async getDeviceInfo(): Promise<DeviceInfo> {
+        const backend = tf.getBackend();
+        if (backend === 'webgl') {
+            const gl = (tf as any).backend().gl;
+            if (!gl) {
+                throw new DeviceError('WebGL context not available');
+            }
 
-            // Start monitoring
-            this.startMonitoring();
+            // Get GPU memory info if available
+            const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'unknown';
+            const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'unknown';
 
-            // Set default device
-            await this.setDefaultDevice();
-        } catch (error) {
-            console.error('Device manager initialization failed:', error);
-            this.enableFallback();
-        }
-    }
-
-    private async detectDevices(): Promise<void> {
-        // Detect GPUs
-        const gpuInfo = await this.gpuCompute.getGPUStatus();
-        if (gpuInfo.isAvailable && gpuInfo.info) {
-            this.devices.set('gpu', {
-                id: 'gpu',
-                name: gpuInfo.info.name,
-                type: 'gpu',
-                capabilities: {
-                    computeCapability: gpuInfo.info.computeCapability,
-                    memorySize: gpuInfo.info.memorySize
+            // Estimate available memory (this is approximate)
+            const totalMemory = gl.getParameter(gl.MAX_TEXTURE_SIZE) ** 2 * 4; // Rough estimate in bytes
+            const usedMemory = tf.memory().numBytes;
+            
+            return {
+                type: `WebGL (${vendor} - ${renderer})`,
+                memory: {
+                    total: totalMemory,
+                    free: totalMemory - usedMemory
                 },
-                status: 'available',
-                load: 0
-            });
+                load: usedMemory / totalMemory
+            };
+        } else {
+            // CPU info
+            const totalMemory = process.memoryUsage().heapTotal;
+            const usedMemory = process.memoryUsage().heapUsed;
+            
+            return {
+                type: 'CPU',
+                memory: {
+                    total: totalMemory,
+                    free: totalMemory - usedMemory
+                },
+                load: usedMemory / totalMemory
+            };
         }
-
-        // Detect CPU
-        const cpuInfo = this.hardwareMonitor.getHardwareProfile().cpu;
-        this.devices.set('cpu', {
-            id: 'cpu',
-            name: `CPU (${cpuInfo.cores} cores)`,
-            type: 'cpu',
-            capabilities: {
-                cores: cpuInfo.cores,
-                memorySize: this.hardwareMonitor.getHardwareProfile().memory.total,
-                clockSpeed: cpuInfo.speed
-            },
-            status: 'available',
-            load: 0
-        });
     }
 
-    private startMonitoring(): void {
-        setInterval(async () => {
-            for (const [id, device] of this.devices) {
-                try {
-                    // Update device status
-                    if (device.type === 'gpu') {
-                        const gpuStatus = await this.gpuCompute.getGPUStatus();
-                        device.status = gpuStatus.isAvailable ? 'available' : 'error';
-                        device.load = await this.getGPULoad();
-                        device.temperature = await this.getGPUTemperature();
-                    } else {
-                        const cpuStatus = await this.hardwareMonitor.getResourceSnapshot();
-                        device.load = cpuStatus.cpu.usage;
-                        device.status = 'available';
-                    }
-
-                    // Check for problems
-                    if (device.load > 90 || (device.temperature && device.temperature > 80)) {
-                        device.status = 'busy';
-                    }
-
-                    // Update active device if needed
-                    if (device === this.activeDevice && device.status !== 'available') {
-                        await this.failover();
-                    }
-                } catch (error) {
-                    console.error(`Error monitoring device ${id}:`, error);
-                    device.status = 'error';
-                    if (device === this.activeDevice) {
-                        await this.failover();
-                    }
-                }
-            }
-        }, 1000); // Check every second
-    }
-
-    private async getGPULoad(): Promise<number> {
-        // This would need to be implemented using platform-specific APIs
-        return 0;
-    }
-
-    private async getGPUTemperature(): Promise<number | undefined> {
-        // This would need to be implemented using platform-specific APIs
-        return undefined;
-    }
-
-    public async selectDevice(preferences: DevicePreference = {}): Promise<Device | null> {
-        const availableDevices = Array.from(this.devices.values())
-            .filter(device => device.status === 'available')
-            .filter(device => {
-                if (preferences.preferGPU && device.type !== 'gpu') return false;
-                if (preferences.minMemory && device.capabilities.memorySize < preferences.minMemory) return false;
-                if (preferences.maxLoad && device.load > preferences.maxLoad) return false;
-                if (preferences.maxTemperature && device.temperature && device.temperature > preferences.maxTemperature) return false;
-                if (preferences.minComputeCapability && device.type === 'gpu') {
-                    if (!this.meetsComputeCapability(device.capabilities.computeCapability, preferences.minComputeCapability)) {
-                        return false;
-                    }
-                }
-                return true;
-            });
-
-        // Sort by preference
-        availableDevices.sort((a, b) => {
-            // Prefer GPU if specified
-            if (preferences.preferGPU) {
-                if (a.type === 'gpu' && b.type !== 'gpu') return -1;
-                if (a.type !== 'gpu' && b.type === 'gpu') return 1;
-            }
-
-            // Sort by load
-            return a.load - b.load;
-        });
-
-        const selectedDevice = availableDevices[0] || null;
-        if (selectedDevice) {
-            await this.activateDevice(selectedDevice);
-        }
-
-        return selectedDevice;
-    }
-
-    private async activateDevice(device: Device): Promise<void> {
-        if (device === this.activeDevice) return;
-
+    public async selectDevice(preferences: DevicePreference = {}): Promise<void> {
         try {
-            if (device.type === 'gpu') {
-                await tf.setBackend('webgl');
+            if (preferences.preferGPU) {
+                try {
+                    // Try WebGL backend
+                    await tf.setBackend('webgl');
+                    await tf.ready();
+                    
+                    // Configure WebGL
+                    tf.env().set('WEBGL_CPU_FORWARD', false);
+                    tf.env().set('WEBGL_PACK', true);
+                    
+                    // Check if device meets requirements
+                    const deviceInfo = await this.getDeviceInfo();
+                    
+                    if (preferences.minMemory && deviceInfo.memory.free < preferences.minMemory) {
+                        throw new DeviceError(`Insufficient GPU memory: ${deviceInfo.memory.free} bytes available, ${preferences.minMemory} bytes required`);
+                    }
+                    
+                    if (preferences.maxLoad && deviceInfo.load > preferences.maxLoad) {
+                        throw new DeviceError(`GPU load too high: ${deviceInfo.load * 100}%, maximum ${preferences.maxLoad * 100}% allowed`);
+                    }
+                    
+                    this.currentDevice = 'webgl';
+                    console.info(`Selected GPU device: ${deviceInfo.type}`);
+                    
+                } catch (error) {
+                    console.warn('WebGL backend initialization failed, falling back to CPU', error);
+                    await this.fallbackToCPU();
+                }
             } else {
-                await tf.setBackend('cpu');
+                await this.fallbackToCPU();
             }
-            this.activeDevice = device;
         } catch (error) {
-            console.error(`Failed to activate device ${device.id}:`, error);
-            throw error;
+            throw new DeviceError(`Failed to initialize device: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
 
-    private async setDefaultDevice(): Promise<void> {
-        // Try GPU first
-        const gpuDevice = this.devices.get('gpu');
-        if (gpuDevice && gpuDevice.status === 'available') {
-            await this.activateDevice(gpuDevice);
-            return;
+    private async fallbackToCPU(): Promise<void> {
+        await tf.setBackend('cpu');
+        await tf.ready();
+        this.currentDevice = 'cpu';
+        const deviceInfo = await this.getDeviceInfo();
+        console.info(`Selected CPU device with ${Math.round(deviceInfo.memory.free / 1024 / 1024)}MB available memory`);
+    }
+
+    public getActiveDevice(): string {
+        if (!this.currentDevice) {
+            throw new DeviceError('No active device selected');
         }
-
-        // Fall back to CPU
-        const cpuDevice = this.devices.get('cpu');
-        if (cpuDevice && cpuDevice.status === 'available') {
-            await this.activateDevice(cpuDevice);
-            return;
-        }
-
-        throw new Error('No available compute devices');
-    }
-
-    private async failover(): Promise<void> {
-        if (!this.fallbackEnabled) return;
-
-        console.warn('Device failover triggered');
-
-        // Try to select a new device
-        const newDevice = await this.selectDevice({
-            maxLoad: 70,
-            maxTemperature: 75
-        });
-
-        if (!newDevice) {
-            console.error('No failover devices available');
-            this.enableFallback();
-        }
-    }
-
-    private enableFallback(): void {
-        // Switch to CPU-only mode
-        this.fallbackEnabled = false;
-        const cpuDevice = this.devices.get('cpu');
-        if (cpuDevice) {
-            this.activateDevice(cpuDevice).catch(console.error);
-        }
-    }
-
-    private meetsComputeCapability(current: string | undefined, required: string): boolean {
-        if (!current) return false;
-
-        // Parse version numbers (e.g., "7.5" -> [7, 5])
-        const currentParts = current.split('.').map(Number);
-        const requiredParts = required.split('.').map(Number);
-
-        // Compare major version
-        if (currentParts[0] !== requiredParts[0]) {
-            return currentParts[0] > requiredParts[0];
-        }
-
-        // Compare minor version
-        return currentParts[1] >= requiredParts[1];
-    }
-
-    public getActiveDevice(): Device | null {
-        return this.activeDevice;
-    }
-
-    public listDevices(): Device[] {
-        return Array.from(this.devices.values());
-    }
-
-    public isFallbackMode(): boolean {
-        return !this.fallbackEnabled;
+        return this.currentDevice;
     }
 
     public async cleanup(): Promise<void> {
-        // Stop monitoring
-        this.devices.clear();
-        this.activeDevice = null;
+        await tf.dispose();
+    }
+
+    public async resetDevice(): Promise<void> {
+        console.info('Resetting device...');
+        
+        try {
+            // Clean up current device
+            await this.cleanup();
+            
+            // Reset TensorFlow backend
+            tf.engine().reset();
+            
+            // Reinitialize with current device preference
+            await this.selectDevice({ preferGPU: this.currentDevice === 'webgl' });
+            
+            // Verify device is ready
+            await tf.ready();
+            const deviceInfo = await this.getDeviceInfo();
+            console.info(`Device reset complete. Using ${deviceInfo.type} with ${Math.round(deviceInfo.memory.free / 1024 / 1024)}MB available memory`);
+            
+        } catch (error) {
+            const message = `Failed to reset device: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            console.error(message);
+            throw new DeviceError(message);
+        }
     }
 }

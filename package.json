@@ -28,6 +28,9 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-node": "^4.22.0",
+    "@tensorflow/tfjs-node-gpu": "^4.22.0",
     "readability-js": "^1.0.7",
     "tslib": "^2.6.0"
   },
@@ -42,6 +45,8 @@
     "eslint-config-prettier": "^9.0.0",
     "husky": "^8.0.0",
     "jest": "^29.5.0",
+    "jest-canvas-mock": "^2.5.2",
+    "jest-environment-jsdom": "^29.7.0",
     "prettier": "^3.0.0",
     "ts-jest": "^29.1.0",
     "ts-node": "^10.9.0",

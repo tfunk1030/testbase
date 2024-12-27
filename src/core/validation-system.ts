@@ -7,9 +7,54 @@ import {
     ValidationCase,
     ValidationMetrics,
     TrajectoryResult,
-    Vector3D
+    Vector3D,
+    Forces,
+    SpinState,
+    BallState
 } from './types';
 import { FlightIntegrator } from './flight-integrator';
+
+/**
+ * Detailed validation metrics interface
+ */
+export interface DetailedValidationMetrics {
+    carryDistance: {
+        actual: number;
+        expected: number;
+        error: number;
+        errorPercent: number;
+    };
+    maxHeight: {
+        actual: number;
+        expected: number;
+        error: number;
+        errorPercent: number;
+    };
+    flightTime: {
+        actual: number;
+        expected: number;
+        error: number;
+        errorPercent: number;
+    };
+    launchAngle: {
+        actual: number;
+        expected: number;
+        error: number;
+        errorPercent: number;
+    };
+    landingAngle: {
+        actual: number;
+        expected: number;
+        error: number;
+        errorPercent: number;
+    };
+    spinRate: {
+        actual: number;
+        expected: number;
+        error: number;
+        errorPercent: number;
+    };
+}
 
 export class ValidationSystem {
     private readonly flightIntegrator: FlightIntegrator;
@@ -136,9 +181,13 @@ export class ValidationSystem {
     /**
      * Calculate R² score for trajectory shape validation
      */
-    private calculateR2Score(actual: TrajectoryPoint[], expected: TrajectoryPoint[]): number {
+    private calculateR2Score(actual: TrajectoryPoint[], expected: TrajectoryPoint[], mass: number): number {
+        if (actual.length === 0 || expected.length === 0) {
+            return 0;
+        }
+
         // Interpolate points to ensure same number of samples
-        const interpolatedExpected = this.interpolateTrajectory(expected, actual.length);
+        const interpolatedExpected = this.interpolateTrajectory(expected, actual.length, mass);
         
         // Calculate R² score for each dimension
         const r2X = this.calculateDimensionR2(actual.map(p => p.position.x), interpolatedExpected.map(p => p.position.x));
@@ -162,13 +211,13 @@ export class ValidationSystem {
     /**
      * Interpolate trajectory points to match target length
      */
-    private interpolateTrajectory(points: TrajectoryPoint[], targetLength: number): TrajectoryPoint[] {
+    private interpolateTrajectory(points: TrajectoryPoint[], targetLength: number, initialMass: number): TrajectoryPoint[] {
         const result: TrajectoryPoint[] = [];
         const timeStep = points[points.length - 1].time / (targetLength - 1);
 
         for (let i = 0; i < targetLength; i++) {
             const time = i * timeStep;
-            const interpolated = this.interpolatePoint(points, time);
+            const interpolated = this.interpolatePoint(points, time, initialMass);
             result.push(interpolated);
         }
 
@@ -178,7 +227,7 @@ export class ValidationSystem {
     /**
      * Interpolate a single trajectory point
      */
-    private interpolatePoint(points: TrajectoryPoint[], time: number): TrajectoryPoint {
+    private interpolatePoint(points: TrajectoryPoint[], time: number, mass: number): TrajectoryPoint {
         // Find surrounding points
         let i = 1;
         while (i < points.length && points[i].time < time) i++;
@@ -186,19 +235,63 @@ export class ValidationSystem {
         const t2 = points[i].time;
         const alpha = (time - t1) / (t2 - t1);
 
-        // Linear interpolation of position and velocity
-        return {
-            time,
+        // Linear interpolation of all properties
+        const p1 = points[i - 1];
+        const p2 = points[i];
+
+        const spin: SpinState = {
+            axis: {
+                x: this.lerp(p1.spin.axis.x, p2.spin.axis.x, alpha),
+                y: this.lerp(p1.spin.axis.y, p2.spin.axis.y, alpha),
+                z: this.lerp(p1.spin.axis.z, p2.spin.axis.z, alpha)
+            },
+            rate: this.lerp(p1.spin.rate, p2.spin.rate, alpha)
+        };
+
+        const forces: Forces = {
+            drag: {
+                x: this.lerp(p1.forces.drag.x, p2.forces.drag.x, alpha),
+                y: this.lerp(p1.forces.drag.y, p2.forces.drag.y, alpha),
+                z: this.lerp(p1.forces.drag.z, p2.forces.drag.z, alpha)
+            },
+            lift: {
+                x: this.lerp(p1.forces.lift.x, p2.forces.lift.x, alpha),
+                y: this.lerp(p1.forces.lift.y, p2.forces.lift.y, alpha),
+                z: this.lerp(p1.forces.lift.z, p2.forces.lift.z, alpha)
+            },
+            magnus: {
+                x: this.lerp(p1.forces.magnus.x, p2.forces.magnus.x, alpha),
+                y: this.lerp(p1.forces.magnus.y, p2.forces.magnus.y, alpha),
+                z: this.lerp(p1.forces.magnus.z, p2.forces.magnus.z, alpha)
+            },
+            gravity: {
+                x: this.lerp(p1.forces.gravity.x, p2.forces.gravity.x, alpha),
+                y: this.lerp(p1.forces.gravity.y, p2.forces.gravity.y, alpha),
+                z: this.lerp(p1.forces.gravity.z, p2.forces.gravity.z, alpha)
+            }
+        };
+
+        // Create base ball state
+        const ballState: BallState = {
             position: {
-                x: this.lerp(points[i - 1].position.x, points[i].position.x, alpha),
-                y: this.lerp(points[i - 1].position.y, points[i].position.y, alpha),
-                z: this.lerp(points[i - 1].position.z, points[i].position.z, alpha)
+                x: this.lerp(p1.position.x, p2.position.x, alpha),
+                y: this.lerp(p1.position.y, p2.position.y, alpha),
+                z: this.lerp(p1.position.z, p2.position.z, alpha)
             },
             velocity: {
-                x: this.lerp(points[i - 1].velocity.x, points[i].velocity.x, alpha),
-                y: this.lerp(points[i - 1].velocity.y, points[i].velocity.y, alpha),
-                z: this.lerp(points[i - 1].velocity.z, points[i].velocity.z, alpha)
-            }
+                x: this.lerp(p1.velocity.x, p2.velocity.x, alpha),
+                y: this.lerp(p1.velocity.y, p2.velocity.y, alpha),
+                z: this.lerp(p1.velocity.z, p2.velocity.z, alpha)
+            },
+            spin,
+            mass // Use the passed mass parameter
+        };
+
+        // Extend to trajectory point
+        return {
+            ...ballState,
+            time,
+            forces
         };
     }
 
@@ -207,48 +300,6 @@ export class ValidationSystem {
      */
     private lerp(a: number, b: number, t: number): number {
         return a + (b - a) * t;
-    }
-
-    /**
-     * Detailed validation metrics interface
-     */
-    interface DetailedValidationMetrics {
-        carryDistance: {
-            actual: number;
-            expected: number;
-            error: number;
-            errorPercent: number;
-        };
-        maxHeight: {
-            actual: number;
-            expected: number;
-            error: number;
-            errorPercent: number;
-        };
-        flightTime: {
-            actual: number;
-            expected: number;
-            error: number;
-            errorPercent: number;
-        };
-        launchAngle: {
-            actual: number;
-            expected: number;
-            error: number;
-            errorPercent: number;
-        };
-        landingAngle: {
-            actual: number;
-            expected: number;
-            error: number;
-            errorPercent: number;
-        };
-        spinRate: {
-            actual: number;
-            expected: number;
-            error: number;
-            errorPercent: number;
-        };
     }
 
     /**
@@ -289,8 +340,19 @@ export class ValidationSystem {
     public validateTrajectory(validationCase: ValidationCase): ValidationResult {
         const errors: string[] = [];
         const warnings: string[] = [];
+
+        if (!validationCase.trajectory) {
+            errors.push('No trajectory data provided');
+            return { isValid: false, errors, warnings, trajectory: validationCase.trajectory };
+        }
+
         const { expectedMetrics } = validationCase;
         const actualMetrics = validationCase.trajectory.metrics;
+
+        if (!actualMetrics || !expectedMetrics) {
+            errors.push('Missing metrics data');
+            return { isValid: false, errors, warnings, trajectory: validationCase.trajectory };
+        }
 
         // Calculate detailed metrics
         const detailedMetrics = this.calculateDetailedMetrics(actualMetrics, expectedMetrics);
@@ -329,8 +391,16 @@ export class ValidationSystem {
         // Add warnings for metrics close to thresholds
         this.addWarningsForNearThresholds(actualMetrics, expectedMetrics, warnings);
 
+        // Get mass from initial state for trajectory comparison
+        const mass = validationCase.initialState.mass;
+
         // Calculate R² score for trajectory shape
-        const r2Score = this.calculateR2Score(validationCase.trajectory.points, validationCase.expectedTrajectory);
+        const r2Score = this.calculateR2Score(
+            validationCase.trajectory.points,
+            validationCase.expectedTrajectory?.points || [],
+            mass
+        );
+        
         if (r2Score < this.R2_SCORE_THRESHOLD) {
             errors.push(`Trajectory Shape Validation:
     R² Score: ${r2Score.toFixed(3)}
@@ -342,9 +412,7 @@ export class ValidationSystem {
             isValid: errors.length === 0,
             errors,
             warnings,
-            metrics: actualMetrics,
-            r2Score,
-            detailedMetrics
+            trajectory: validationCase.trajectory
         };
     }
 

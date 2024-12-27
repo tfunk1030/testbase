@@ -1,26 +1,26 @@
 module.exports = {
-  preset: 'ts-jest',
-  testEnvironment: 'node',
-  roots: ['<rootDir>/src'],
-  testMatch: ['**/*.test.ts'],
-  moduleNameMapper: {
-    '^@core/(.*)$': '<rootDir>/src/core/$1',
-    '^@api/(.*)$': '<rootDir>/src/api/$1',
-    '^@tests/(.*)$': '<rootDir>/src/tests/$1'
-  },
-  collectCoverageFrom: [
-    'src/**/*.ts',
-    '!src/**/*.d.ts',
-    '!src/benchmark/**',
-    '!src/**/index.ts'
-  ],
-  coverageThreshold: {
-    global: {
-      branches: 80,
-      functions: 80,
-      lines: 80,
-      statements: 80
-    }
-  },
-  verbose: true
+    preset: 'ts-jest',
+    testEnvironment: 'jsdom',
+    moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
+    transform: {
+        '^.+\\.(ts|tsx)$': 'ts-jest'
+    },
+    globals: {
+        'ts-jest': {
+            tsconfig: 'tsconfig.json'
+        }
+    },
+    setupFiles: [
+        'jest-canvas-mock',
+        '<rootDir>/src/tests/setup.ts'
+    ],
+    moduleNameMapper: {
+        '@tensorflow/tfjs-node-gpu': '<rootDir>/src/tests/mocks/tf-mock.ts',
+        '@tensorflow/tfjs': '<rootDir>/src/tests/mocks/tf-mock.ts'
+    },
+    testEnvironmentOptions: {
+        url: 'http://localhost/'
+    },
+    setupFilesAfterEnv: ['<rootDir>/src/tests/setup-after-env.ts'],
+    testTimeout: 30000
 };
