@@ -1,10 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { PhysicsEngine } from '@/services/physics/PhysicsEngine';
 import { TrajectoryCache } from '@/services/cache/TrajectoryCache';
+import { WeatherService } from '@/services/weather/WeatherService';
 import { BallProperties, Environment, BallState } from '@/types';
 
 const cache = new TrajectoryCache();
 const physicsEngine = new PhysicsEngine(cache);
+const weatherService = new WeatherService();
 
 interface ShotCalculatorRequest {
   targetDistance: number;
@@ -31,8 +33,8 @@ export default async function handler(
   try {
     const { targetDistance, environment, settings }: ShotCalculatorRequest = req.body;
 
-    // Convert to physics engine input format
-    const physicsEnvironment: Environment = {
+    // Get current weather if no environment provided
+    const physicsEnvironment: Environment = environment ? {
       temperature: environment.temperature,
       pressure: environment.pressure * 100, // Convert hPa to Pa
       humidity: environment.humidity / 100, // Convert percentage to decimal
@@ -44,7 +46,8 @@ export default async function handler(
         y: 0,
         z: environment.wind?.speed * Math.sin(environment.wind?.direction * Math.PI / 180) || 0
       }
-    };
+    } : await weatherService.getCurrentWeather(req.query.latitude as string, req.query.longitude as string)
+      .then(weather => weatherService.convertToEnvironment(weather));
 
     // Standard ball properties
     const ballProperties: BallProperties = {
