@@ -81,12 +81,12 @@ export default function DistanceCalculator() {
             type="range"
             min={settings.distanceUnit === 'yards' ? '50' : '45'}
             max={settings.distanceUnit === 'yards' ? '300' : '275'}
-            value={targetYardage}
-            onChange={(e) => setTargetYardage(parseInt(e.target.value))}
+            value={targetDistance}
+            onChange={(e) => setTargetDistance(parseInt(e.target.value))}
             className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:shadow-blue-500/50 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:bg-blue-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-lg [&::-moz-range-thumb]:shadow-blue-500/50"
           />
           <div className="text-2xl font-bold w-32 text-right">
-            {formatDistance(targetYardage)}
+            {formatDistance(targetDistance)}
           </div>
         </div>
       </div>
