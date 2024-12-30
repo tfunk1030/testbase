@@ -31,6 +31,9 @@
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-node": "^4.22.0",
     "@tensorflow/tfjs-node-gpu": "^4.22.0",
+    "next": "^15.1.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "readability-js": "^1.0.7",
     "tslib": "^2.6.0"
   },
@@ -60,5 +63,17 @@
   ],
   "engines": {
     "node": ">=14.0.0"
-  }
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tfunk1030/testbase.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/tfunk1030/testbase/issues"
+  },
+  "homepage": "https://github.com/tfunk1030/testbase#readme"
 }

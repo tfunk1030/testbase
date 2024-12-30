@@ -1,0 +1,12 @@
+/drop
+/add       package.json
+/add       pages\api\shot-calculator.ts
+/add       src\benchmark\performance.ts
+/add       src\core\aerodynamics.ts
+/add       src\core\flight-model.ts
+/add       src\services\weather\WeatherService.ts
+/add       src\tests\run-validation-suite.ts
+/add       src\types.ts
+/add       uidontchange\Operation.md
+/add       uidontchange\app\shot-calculator\page.tsx
+/add       uidontchange\lib\shot-calculator\store.ts
