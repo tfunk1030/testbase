@@ -39,7 +39,11 @@ export default async function handler(
       altitude: settings.altitudeUnit === 'feet' 
         ? environment.altitude * 0.3048 // Convert feet to meters
         : environment.altitude,
-      wind: { x: 0, y: 0, z: 0 }
+      wind: { 
+        x: environment.wind?.speed * Math.cos(environment.wind?.direction * Math.PI / 180) || 0,
+        y: 0,
+        z: environment.wind?.speed * Math.sin(environment.wind?.direction * Math.PI / 180) || 0
+      }
     };
 
     // Standard ball properties
@@ -69,14 +73,31 @@ export default async function handler(
     });
 
     // Convert physics results to UI format
+    const windEffect = calculateWindEffect(
+      targetDistance,
+      physicsEnvironment.wind,
+      settings.distanceUnit
+    );
+
     const adjustments = {
-      adjustedYardage: targetDistance * (1 + result.metrics.totalDistance / targetDistance),
+      adjustedYardage: targetDistance * (1 + (result.metrics.totalDistance + windEffect) / targetDistance),
       densityEffect: result.metrics.totalDistance * 0.1,
       altitudeEffect: physicsEnvironment.altitude * 0.00018 * targetDistance,
       humidityEffect: (physicsEnvironment.humidity - 0.5) * 0.0002 * targetDistance,
       temperatureEffect: (physicsEnvironment.temperature - 20) * 0.001 * targetDistance,
-      totalEffect: result.metrics.totalDistance - targetDistance
+      windEffect: windEffect,
+      totalEffect: result.metrics.totalDistance + windEffect - targetDistance
     };
+
+    function calculateWindEffect(
+      distance: number,
+      wind: { x: number, y: number, z: number },
+      unit: 'yards' | 'meters'
+    ): number {
+      const windSpeed = Math.sqrt(wind.x * wind.x + wind.z * wind.z);
+      const conversionFactor = unit === 'yards' ? 1.09361 : 1;
+      return windSpeed * 0.07 * distance * conversionFactor; // 7% effect per m/s at full distance
+    }
 
     res.json(adjustments);
   } catch (error) {

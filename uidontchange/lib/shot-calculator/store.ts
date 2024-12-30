@@ -7,6 +7,10 @@ interface Environment {
   humidity: number
   pressure: number
   density: number
+  wind: {
+    speed: number
+    direction: number
+  }
 }
 
 interface Settings {
@@ -31,20 +35,28 @@ interface CalculationParams {
 
 interface ShotCalculatorState {
   targetDistance: number
+  windSpeed: number
+  windDirection: number
   adjustments: Adjustments | null
   isCalculating: boolean
   error: Error | null
   setTargetDistance: (distance: number) => void
+  setWindSpeed: (speed: number) => void
+  setWindDirection: (direction: number) => void
   calculateShot: (params: CalculationParams) => Promise<void>
 }
 
 export const useShotCalculator = create<ShotCalculatorState>((set) => ({
   targetDistance: 150,
+  windSpeed: 0,
+  windDirection: 0,
   adjustments: null,
   isCalculating: false,
   error: null,
 
   setTargetDistance: (distance) => set({ targetDistance: distance }),
+  setWindSpeed: (speed) => set({ windSpeed: speed }),
+  setWindDirection: (direction) => set({ windDirection: direction }),
 
   calculateShot: async (params: CalculationParams) => {
     try {
