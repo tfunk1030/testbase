@@ -13,14 +13,10 @@ interface WeatherResponse {
 }
 
 export class WeatherService {
-  private readonly tomorrowApiKey: string;
+  private readonly tomorrowApiKey: string = 'jG9onLuVeiR4NWlVIO85EWWLCtQ2UzqV';
   
   constructor() {
-    const apiKey = process.env.TOMORROW_API_KEY;
-    if (!apiKey) {
-      throw new Error('Missing TOMORROW_API_KEY environment variable');
-    }
-    this.tomorrowApiKey = apiKey;
+    // Initialize weather service
   }
 
   async getCurrentWeather(latitude: number, longitude: number): Promise<WeatherResponse> {
