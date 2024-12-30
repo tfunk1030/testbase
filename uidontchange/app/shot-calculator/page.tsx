@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useEnvironmental } from '@/lib/hooks/use-environmental'
 import { useClubSettings } from '@/lib/club-settings-context'
 import { usePremium } from '@/lib/premium-context'
 import { useSettings } from '@/lib/settings-context'
-import { useShotCalc } from '@/lib/shot-calc-context'
+import { useShotCalculator } from '@/lib/shot-calculator/store'
 import { 
   Target, 
   Wind, 
@@ -21,57 +21,26 @@ export default function DistanceCalculator() {
   const { getRecommendedClub, clubs } = useClubSettings()
   const { isPremium, setShowUpgradeModal } = usePremium()
   const { settings, convertDistance, formatDistance, formatTemperature, formatAltitude, convertAltitude } = useSettings()
-  const { setShotCalcData } = useShotCalc()
-  const [targetYardage, setTargetYardage] = useState(150)
-  const [lastUpdate, setLastUpdate] = useState<number | null>(null)
+  const { targetDistance, setTargetDistance, adjustments, calculateShot } = useShotCalculator()
 
-  // Calculate all adjustments in one memoized function
-  const calculateAdjustments = useCallback(() => {
-    if (!conditions) return null;
-
-    const altitudeInMeters = settings.altitudeUnit === 'feet' 
-      ? convertAltitude(conditions.altitude, 'meters')
-      : conditions.altitude
-
-    const densityEffect = (conditions.density - 1.225) * targetYardage * 0.1
-    const altitudeEffect = altitudeInMeters * 0.00018 * targetYardage
-    const humidityEffect = (conditions.humidity - 50) * 0.0002 * targetYardage
-    const temperatureEffect = (conditions.temperature - 20) * 0.001 * targetYardage
-
-    const totalEffect = densityEffect + altitudeEffect + humidityEffect + temperatureEffect
-    const adjustedYardage = targetYardage + totalEffect
-
-    return {
-      adjustedYardage,
-      densityEffect,
-      altitudeEffect,
-      humidityEffect,
-      temperatureEffect,
-      totalEffect
-    }
-  }, [conditions, targetYardage, settings.altitudeUnit, convertAltitude])
-
-  // Memoize the results
-  const adjustments = useMemo(() => calculateAdjustments(), [calculateAdjustments])
-
-  // Update context only when needed
   useEffect(() => {
-    // Prevent multiple updates in the same render cycle
-    const now = Date.now()
-    if (lastUpdate && now - lastUpdate < 100) return;
-
-    if (conditions && adjustments) {
-      setLastUpdate(now)
-      setShotCalcData({
-        targetYardage,
-        elevation: conditions.altitude,
-        temperature: conditions.temperature,
-        humidity: conditions.humidity,
-        pressure: conditions.pressure,
-        adjustedDistance: adjustments.adjustedYardage
+    if (conditions) {
+      calculateShot({
+        targetDistance,
+        environment: {
+          altitude: conditions.altitude,
+          temperature: conditions.temperature,
+          humidity: conditions.humidity,
+          pressure: conditions.pressure,
+          density: conditions.density
+        },
+        settings: {
+          altitudeUnit: settings.altitudeUnit,
+          distanceUnit: settings.distanceUnit
+        }
       })
     }
-  }, [conditions, adjustments, targetYardage, setShotCalcData, lastUpdate])
+  }, [conditions, targetDistance, settings.altitudeUnit, calculateShot])
 
   const recommendedClub = useMemo(() => 
     adjustments ? getRecommendedClub(adjustments.adjustedYardage) : null, 
