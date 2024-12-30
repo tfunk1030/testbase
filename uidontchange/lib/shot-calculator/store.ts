@@ -35,10 +35,10 @@ interface ShotCalculatorState {
   isCalculating: boolean
   error: Error | null
   setTargetDistance: (distance: number) => void
-  calculateShot: (params: CalculationParams) => void
+  calculateShot: (params: CalculationParams) => Promise<void>
 }
 
-export const useShotCalculator = create<ShotCalculatorState>((set, get) => ({
+export const useShotCalculator = create<ShotCalculatorState>((set) => ({
   targetDistance: 150,
   adjustments: null,
   isCalculating: false,
@@ -46,34 +46,42 @@ export const useShotCalculator = create<ShotCalculatorState>((set, get) => ({
 
   setTargetDistance: (distance) => set({ targetDistance: distance }),
 
-  calculateShot: (params) => {
-    const { environment, settings } = params
-    
-    // Convert altitude if needed
-    const altitudeInMeters = settings.altitudeUnit === 'feet'
-      ? convertAltitude(environment.altitude, 'meters')
-      : environment.altitude
+  calculateShot: async (params: CalculationParams) => {
+    try {
+      set({ isCalculating: true, error: null });
 
-    // Calculate individual effects
-    const densityEffect = (environment.density - 1.225) * params.targetDistance * 0.1
-    const altitudeEffect = altitudeInMeters * 0.00018 * params.targetDistance
-    const humidityEffect = (environment.humidity - 50) * 0.0002 * params.targetDistance
-    const temperatureEffect = (environment.temperature - 20) * 0.001 * params.targetDistance
+      const response = await fetch('/api/shot-calculator', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          targetDistance: params.targetDistance,
+          environment: params.environment,
+          settings: params.settings
+        }),
+      });
 
-    // Calculate total adjustment
-    const totalEffect = densityEffect + altitudeEffect + humidityEffect + temperatureEffect
-    const adjustedYardage = params.targetDistance + totalEffect
-
-    // Update state with results
-    set({
-      adjustments: {
-        adjustedYardage,
-        densityEffect,
-        altitudeEffect,
-        humidityEffect,
-        temperatureEffect,
-        totalEffect
+      if (!response.ok) {
+        throw new Error('Calculation failed');
       }
-    })
+
+      const adjustments = await response.json();
+      set({ adjustments, isCalculating: false });
+    } catch (error) {
+      console.error('Shot calculation error:', error);
+      set({ 
+        error: error as Error, 
+        isCalculating: false,
+        adjustments: {
+          adjustedYardage: params.targetDistance,
+          densityEffect: 0,
+          altitudeEffect: 0,
+          humidityEffect: 0,
+          temperatureEffect: 0,
+          totalEffect: 0
+        }
+      });
+    }
   }
-}))
+}));
